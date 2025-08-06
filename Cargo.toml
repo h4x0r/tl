@@ -1,0 +1,64 @@
+[package]
+name = "tl"
+version = "0.1.0"
+edition = "2021"
+authors = ["Albert Hui <albert@securityronin.com>"]
+description = "tl (Timeline) - A fast CLI tool for parsing NTFS Master File Table"
+license = "MIT"
+
+[[bin]]
+name = "tl"
+path = "src/main.rs"
+
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+csv = "1.3"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.8"
+anyhow = "1.0"
+byteorder = "1.5"
+memmap2 = "0.9"
+rayon = "1.8"
+zip = "0.6"
+flate2 = "1.0"
+indicatif = "0.17"
+regex = "1.10"
+crossterm = "0.27"
+ratatui = "0.28"
+unicode-width = "0.2"
+is-terminal = "0.4"
+# Dependencies for proper MFT parsing
+log = "0.4"
+encoding = "0.2"
+bitflags = "1"
+# High-performance optimizations
+simd-json = "0.13"
+wide = "0.7"
+parking_lot = "0.12"
+dashmap = "5.5"
+crossbeam-channel = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["fileapi", "handleapi", "ioapiset", "winnt", "errhandlingapi", "winbase"] }
+
+[profile.release]
+lto = "fat"           # Aggressive link-time optimization
+codegen-units = 1      # Single codegen unit for better optimization
+panic = "abort"        # Smaller binary size
+opt-level = 3          # Maximum optimization
+overflow-checks = false # Disable overflow checks for speed
+debug = false          # No debug info in release
+strip = true           # Strip symbols for smaller binary
+
+# Profile for development with some optimizations
+[profile.dev]
+opt-level = 1          # Some optimization for faster development
+overflow-checks = true # Keep overflow checks in dev
+
+# Profile for benchmarking
+[profile.bench]
+inherits = "release"
+debug = true           # Keep debug info for profiling

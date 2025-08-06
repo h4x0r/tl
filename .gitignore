@@ -1,0 +1,25 @@
+# Rust
+/target/
+Cargo.lock
+
+# Editor files
+.vscode/
+.idea/
+*~
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+
+# Test files
+*.mft
+*.bin
+
+# Logs
+*.log
+
