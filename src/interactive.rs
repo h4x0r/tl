@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind},
     execute,
     terminal,
 };
@@ -234,11 +234,17 @@ impl InteractiveViewer {
 
             // Poll for events with a short timeout to allow UI updates
             if event::poll(std::time::Duration::from_millis(50))? {
-                if let Event::Key(key) = event::read()? {
-                    match self.handle_key_event(key) {
-                        KeyResult::Quit => break,
-                        KeyResult::Continue => {}
+                match event::read()? {
+                    Event::Key(key) => {
+                        match self.handle_key_event(key) {
+                            KeyResult::Quit => break,
+                            KeyResult::Continue => {}
+                        }
                     }
+                    Event::Mouse(mouse) => {
+                        self.handle_mouse_event(mouse);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -248,7 +254,8 @@ impl InteractiveViewer {
         execute!(
             self.terminal.backend_mut(),
             terminal::LeaveAlternateScreen,
-            cursor::Show
+            cursor::Show,
+            event::DisableMouseCapture
         )?;
 
         Ok(())
@@ -258,7 +265,7 @@ impl InteractiveViewer {
     fn setup_terminal(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
+        execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide, event::EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         self.terminal = Terminal::new(backend)?;
         
@@ -933,6 +940,43 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
             }
 
             _ => KeyResult::Continue,
+        }
+    }
+
+    /// Handle mouse input
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollDown => {
+                for _ in 0..3 {  // Scroll 3 lines at a time
+                    self.next_item();
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                for _ in 0..3 {  // Scroll 3 lines at a time
+                    self.previous_item();
+                }
+            }
+            MouseEventKind::Down(_) => {
+                // Handle clicking on table rows
+                let click_y = mouse.row as usize;
+                let terminal_height = self.terminal_height as usize;
+                
+                // Layout: Header(1) + Table + Details(12) + Footer(1)
+                // Table area ends at: terminal_height - 12 (details) - 1 (footer) = terminal_height - 13
+                let table_end_y = terminal_height.saturating_sub(13);
+                
+                // Data rows start at row 2 (after app header + table header)
+                if click_y >= 2 && click_y < table_end_y {
+                    let table_data_row = click_y.saturating_sub(2);
+                    let absolute_row = self.viewport_start + table_data_row;
+                    
+                    // Make sure the clicked row is within bounds
+                    if absolute_row < self.filtered_events.len() {
+                        self.table_state.select(Some(absolute_row));
+                    }
+                }
+            }
+            _ => {} // Ignore other mouse events
         }
     }
 

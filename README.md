@@ -137,7 +137,8 @@ tl evidence.mft --single-pass --filter "confidential"
 ### Interactive TUI Viewer (Default)
 Full-featured timeline viewer with search and navigation:
 - **Search**: Press `/` to search through timeline events
-- **Navigation**: Arrow keys, Page Up/Down, Home/End
+- **Navigation**: Arrow keys, Page Up/Down, Home/End, mouse scroll wheel
+- **Mouse Support**: Click on rows to select, scroll wheel to navigate
 - **Sorting**: Real-time chronological timeline display
 - **Details**: Full file metadata including ADS streams
 - **Filtering**: Live filtering during analysis
