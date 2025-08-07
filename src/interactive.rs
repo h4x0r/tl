@@ -420,6 +420,11 @@ event.file_size.map_or("Unknown".to_string(), |s| {
 
     /// Draw the interface - optimized for speed
     fn draw(&mut self) -> io::Result<()> {
+        self.draw_main_interface()
+    }
+    
+    /// Draw the main interface content
+    fn draw_main_interface(&mut self) -> io::Result<()> {
         
         // Only update terminal size if needed (expensive call)
         let size = self.terminal.size()?;
@@ -1176,7 +1181,10 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
     
     /// Draw search prompt as overlay on current screen
     fn draw_search_prompt(&mut self) -> io::Result<()> {
-        // Just overlay the search prompt without redrawing the whole screen
+        // Draw the main interface first, then overlay search prompt
+        self.draw_main_interface()?;
+        
+        // Overlay the search prompt
         self.terminal.draw(|f| {
             let area = f.area();
             let prompt_text = format!("Search: {}_", self.search_query);
@@ -1191,6 +1199,7 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
                 height: 3,
             };
             
+            f.render_widget(Clear, search_area); // Clear only the search area
             f.render_widget(search_paragraph, search_area);
         })?;
         
