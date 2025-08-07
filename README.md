@@ -10,7 +10,7 @@ A blazingly fast command-line tool for parsing NTFS Master File Table ($MFT) rec
 - **🎯 Nanosecond Precision**: Preserves full NTFS timestamp resolution (100ns intervals) 
 - **🔴 Live System Access**: Direct NTFS volume access on Windows (no MFT extraction needed)
 - **🗜️ Compressed File Support**: Automatic decompression of .zip and .gz archives
-- **📊 Multiple Output Formats**: Human-readable, JSON, and CSV
+- **📊 Multiple Output Formats**: Interactive TUI viewer, JSON, and CSV
 - **⚡ Parallel Processing**: Multi-core processing with memory-mapped I/O
 - **🔧 Format Auto-Detection**: Handles both dense and sparse MFT formats
 - **💾 Memory Efficient**: Processes large MFT files without excessive RAM usage
@@ -54,7 +54,7 @@ OPTIONS:
         --filter <FILTER>         Filter by filename (case insensitive)
         --after <AFTER>           Show records after date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
         --before <BEFORE>         Show records before date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
-        --format <FORMAT>         Output format [default: human] [values: human, json, csv]
+        --format <FORMAT>         Output format [default: interactive] [values: interactive, json, csv]
         --output <OUTPUT>         Output file (use "-" for stdout)
         --timezone <TIMEZONE>     Display timezone [default: UTC]
     -h, --help                    Print help information
@@ -65,7 +65,7 @@ OPTIONS:
 ### Basic MFT Parsing
 
 ```bash
-# Parse MFT file
+# Parse MFT file (opens interactive viewer by default)
 tl mft_dump.bin
 
 # Parse compressed files directly
@@ -86,8 +86,8 @@ tl C:
 # Real-time incident response
 tl D: --after "2024-01-15" --filter "exe" --format json --output live_scan.json
 
-# Quick system triage
-tl C: --filter "temp" --format human
+# Quick system triage (interactive viewer)
+tl C: --filter "temp"
 ```
 
 ### Timeline Analysis
@@ -106,9 +106,9 @@ tl case_files.zip --after "2024-06-15 14:00:00" --before "2024-06-15 18:00:00" -
 ### Malware Hunting
 
 ```bash
-# Search for suspicious files
-tl C: --filter "temp" --format human
-tl malware_sample.zip --filter "temp" --format human | grep DELETED
+# Search for suspicious files (interactive viewer)
+tl C: --filter "temp"
+tl malware_sample.zip --filter "temp"
 
 # Export all executable files
 tl forensics_export.zip --filter ".exe" --format json --output executables.json
@@ -128,24 +128,19 @@ for file in *.zip; do
     tl "$file" --format csv --output "${file%.zip}_timeline.csv"
 done
 
-# Quick triage mode
-tl evidence.mft --single-pass --filter "confidential" --format human
+# Quick triage mode (interactive viewer)
+tl evidence.mft --single-pass --filter "confidential"
 ```
 
 ## 📊 Output Formats
 
-### Human-Readable Format
-Perfect for investigation and analysis:
-```
-document.docx (12345) [❌ DELETED]
-  Location:         Users\John\Documents
-  Created:          2024-01-15T10:30:45.123456700Z(SI) 2024-01-15T10:30:45.123456700Z(FN)
-  Modified:         2024-01-20T15:22:10.987654300Z(SI) 2024-01-20T15:22:10.987654300Z(FN)
-  Size:             45678 bytes
-  ADS:              2 stream(s)
-    Zone.Identifier (26 bytes)
-    custom_metadata (156 bytes)
-```
+### Interactive TUI Viewer (Default)
+Full-featured timeline viewer with search and navigation:
+- **Search**: Press `/` to search through timeline events
+- **Navigation**: Arrow keys, Page Up/Down, Home/End
+- **Sorting**: Real-time chronological timeline display
+- **Details**: Full file metadata including ADS streams
+- **Filtering**: Live filtering during analysis
 
 ### JSON Format
 Structured data for programmatic analysis:
@@ -172,20 +167,6 @@ Ideal for timeline analysis in Excel/databases:
 record_number,filename,file_size,location,created,modified
 12345,document.docx,45678,Users\John\Documents,2024-01-15T10:30:45.123456700Z,2024-01-20T15:22:10.987654300Z
 ```
-
-## 🎯 Performance Benchmarks
-
-**Test Environment**: 1,000 MFT records (~1MB file)
-
-| Implementation | Average Time | Memory Usage | Precision |
-|----------------|-------------|--------------|-----------|
-| **Rust (tl)**     | **10ms**    | **~8MB**     | **Nanosecond** |
-| Python         | 125ms       | ~45MB        | Microsecond |
-
-**Performance Gains:**
-- ⚡ **12.5x faster** processing
-- 💾 **5.6x less memory** usage  
-- 🎯 **1000x better** timestamp precision (ns vs μs)
 
 ## 📈 Performance
 
