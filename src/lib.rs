@@ -9,7 +9,6 @@
 //! - Parse MFT records from various formats (.mft, .zip, .gz)
 //! - Live system access on Windows (requires Administrator privileges)
 //! - Two-pass processing for complete directory path reconstruction
-//! - Timestomping detection
 //! - Alternative Data Stream (ADS) support
 //! - Multiple output formats (human-readable, JSON, CSV)
 //! - Parallel processing for improved performance
