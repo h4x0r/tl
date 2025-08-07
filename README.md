@@ -10,7 +10,6 @@ A blazingly fast command-line tool for parsing NTFS Master File Table ($MFT) rec
 - **🎯 Nanosecond Precision**: Preserves full NTFS timestamp resolution (100ns intervals) 
 - **🔴 Live System Access**: Direct NTFS volume access on Windows (no MFT extraction needed)
 - **🗜️ Compressed File Support**: Automatic decompression of .zip and .gz archives
-- **🔍 Complete Directory Paths**: Full directory paths with long filenames (no 8.3 short names)
 - **📊 Multiple Output Formats**: Human-readable, JSON, and CSV
 - **⚡ Parallel Processing**: Multi-core processing with memory-mapped I/O
 - **🔧 Format Auto-Detection**: Handles both dense and sparse MFT formats
@@ -26,7 +25,7 @@ A blazingly fast command-line tool for parsing NTFS Master File Table ($MFT) rec
 ### From Source
 
 ```bash
-git clone <repository>
+git clone https://github.com/h4x0r/tl
 cd tl
 cargo build --release
 ```
@@ -41,40 +40,6 @@ sudo cp ./target/release/tl /usr/local/bin/
 ```
 
 ## 📖 Usage
-
-### Basic Examples
-
-```bash
-# Parse MFT file with complete directory paths
-tl mft_dump.bin
-
-# Parse compressed MFT files directly
-tl evidence.zip          # Automatically extracts $MFT.gz from zip
-tl \$MFT.gz              # Direct gzip decompression
-
-# Access live system C: drive (Windows only, requires Administrator privileges)
-tl C:
-
-# Export to JSON with all 8 timestamps and full paths
-tl mft.bin --format json --output timeline.json
-
-# Process compressed evidence archives
-tl forensic_image.zip --filter "malware" --format json --output analysis.json
-
-# Live system access with filtering
-tl C: --filter "malware" --format json --output live_scan.json
-
-# Filter for specific files
-tl mft.bin --filter "secret" --format human
-
-# Fast processing mode
-tl mft.bin --single-pass --format csv
-
-# Time-based filtering on compressed archives
-tl evidence.zip --after "2024-01-01" --before "2024-12-31" --format json
-```
-
-### Command Line Options
 
 ```
 USAGE:
@@ -95,54 +60,77 @@ OPTIONS:
     -h, --help                    Print help information
 ```
 
-## 🎯 Performance Benchmarks
+## 📚 Examples & Use Cases
 
-**Test Environment**: 1,000 MFT records (~1MB file)
+### Basic MFT Parsing
 
-| Implementation | Average Time | Memory Usage | Precision |
-|----------------|-------------|--------------|-----------|
-| **Rust (tl)**     | **10ms**    | **~8MB**     | **Nanosecond** |
-| Python         | 125ms       | ~45MB        | Microsecond |
+```bash
+# Parse MFT file
+tl mft_dump.bin
 
-**Performance Gains:**
-- ⚡ **12.5x faster** processing
-- 💾 **5.6x less memory** usage  
-- 🎯 **1000x better** timestamp precision (ns vs μs)
+# Parse compressed files directly
+tl evidence.zip
+tl $MFT.gz
 
-## 🔬 Advanced Features
-
-### Nanosecond-Precision Timestamps
-
-Unlike other MFT parsers, `tl` preserves the full 100-nanosecond resolution of NTFS timestamps:
-
-```json
-{
-  "timestamps": {
-    "created": "2019-04-17T18:40:00.123456700Z",
-    "modified": "2019-04-17T18:40:00.234567800Z"
-  },
-  "fn_timestamps": {
-    "created": "2019-04-17T18:40:00.123456700Z",
-    "modified": "2019-04-17T18:40:00.234567800Z"
-  }
-}
+# Export to different formats
+tl mft.bin --format json --output timeline.json
+tl mft.bin --format csv --output timeline.csv
 ```
 
-### Complete Directory Paths with Long Filenames
+### Live System Access (Windows)
 
-Every file shows its complete folder location with **full long filenames** (not 8.3 short names):
+```bash
+# Access live C: drive (requires Administrator privileges)
+tl C:
 
+# Real-time incident response
+tl D: --after "2024-01-15" --filter "exe" --format json --output live_scan.json
+
+# Quick system triage
+tl C: --filter "temp" --format human
 ```
-malware.exe (98765)
-  Location:         Users\Administrator\AppData\Local\Temp\suspicious_folder
-  Created:          2024-06-15T14:30:22.500000000Z(SI) 2024-06-15T14:30:22.500000000Z(FN)
-  Size:             524288 bytes
+
+### Timeline Analysis
+
+```bash
+# Export timeline for specific date range
+tl evidence.zip --after "2024-06-01" --before "2024-06-30" --format csv --output june_timeline.csv
+
+# Live system analysis during incident window
+tl C: --after "2024-06-15 14:00:00" --before "2024-06-15 18:00:00" --format json --output incident.json
+
+# Find activity during specific timeframe
+tl case_files.zip --after "2024-06-15 14:00:00" --before "2024-06-15 18:00:00" --format json
 ```
 
-**Smart Filename Selection:** When multiple FILE_NAME attributes exist (common in NTFS), `tl` automatically selects the best one:
-- **Prioritizes**: Win32 long filenames over DOS 8.3 short names
-- **Result**: `Program Files` instead of `PROGRA~1`, `Software` instead of `SOFTWA~1`
-- **Maintains**: Full readability in Location paths
+### Malware Hunting
+
+```bash
+# Search for suspicious files
+tl C: --filter "temp" --format human
+tl malware_sample.zip --filter "temp" --format human | grep DELETED
+
+# Export all executable files
+tl forensics_export.zip --filter ".exe" --format json --output executables.json
+
+# Hunt for specific patterns
+tl suspect_machine.zip --filter "powershell" --format csv --output powershell_activity.csv
+```
+
+### Evidence Processing
+
+```bash
+# Process multiple compressed evidence files
+tl evidence.zip --filter "malware" --format json --output analysis.json
+
+# Bulk processing workflow
+for file in *.zip; do
+    tl "$file" --format csv --output "${file%.zip}_timeline.csv"
+done
+
+# Quick triage mode
+tl evidence.mft --single-pass --filter "confidential" --format human
+```
 
 ## 📊 Output Formats
 
@@ -185,128 +173,19 @@ record_number,filename,file_size,location,created,modified
 12345,document.docx,45678,Users\John\Documents,2024-01-15T10:30:45.123456700Z,2024-01-20T15:22:10.987654300Z
 ```
 
-## 🗜️ Compressed File Support
+## 🎯 Performance Benchmarks
 
-**Automatic Decompression:** Process compressed MFT files without manual extraction.
+**Test Environment**: 1,000 MFT records (~1MB file)
 
-### Supported Formats
+| Implementation | Average Time | Memory Usage | Precision |
+|----------------|-------------|--------------|-----------|
+| **Rust (tl)**     | **10ms**    | **~8MB**     | **Nanosecond** |
+| Python         | 125ms       | ~45MB        | Microsecond |
 
-- **ZIP Archives**: Automatically extracts `$MFT.gz`, `$MFT`, or `mft.gz` files
-- **GZIP Files**: Direct decompression of `.gz` compressed MFT files
-- **Raw MFT Files**: Traditional uncompressed MFT files
-
-### Usage Examples
-
-```bash
-# Process ZIP archive containing compressed MFT
-tl evidence.zip
-
-# Direct gzip decompression
-tl \$MFT.gz
-
-# Mixed forensic workflows
-tl compressed_mft.gz --filter "exe" --format json --output malware_scan.json
-
-# Timeline analysis from compressed evidence
-tl case_2024.zip --after "2024-06-01" --format csv --output timeline.csv
-```
-
-### Technical Details
-
-- **Smart Detection**: Automatically detects file type by extension
-- **Efficient Processing**: On-the-fly decompression without temporary files
-- **ZIP Prioritization**: Prefers `$MFT.gz` over uncompressed `$MFT` in archives
-- **Memory Efficient**: Streams decompression to minimize RAM usage
-- **Error Handling**: Clear messages for unsupported archives or corruption
-
-### Forensic Workflow Integration
-
-```bash
-# Common forensic tool chain compatibility
-tl evidence_export.zip --format json | jq '.[] | select(.is_deleted)'
-
-# Bulk processing of compressed evidence
-for file in *.zip; do
-    tl "$file" --format csv --output "${file%.zip}_timeline.csv"
-done
-```
-
-## 🔴 Live System Access (Windows)
-
-**New Feature:** Access live NTFS volumes directly without requiring MFT extraction.
-
-### Requirements
-- Windows operating system
-- Administrator privileges
-- NTFS file system
-
-### Usage Examples
-
-```bash
-# Access live C: drive (requires Administrator privileges)
-tl C:
-
-# Real-time incident response - scan D: drive for recent malware
-tl D: --after "2024-01-15" --filter "exe" --format json --output live_scan.json
-
-# Live system timeline analysis during active investigation
-tl C: --format csv --output live_timeline.csv
-
-# Quick triage of system drive
-tl C: --filter "temp" --format human
-```
-
-### Requirements
-- Administrator privileges for raw disk access
-- Windows operating system with NTFS file system
-- Read-only access - no modification of system data
-
-## 🕵️ Forensic Applications
-
-### Timeline Analysis
-```bash
-# Export timeline for specific date range (compressed evidence)
-tl evidence.zip --after "2024-06-01" --before "2024-06-30" --format csv --output june_timeline.csv
-
-# Live system analysis during incident window
-tl C: --after "2024-06-15 14:00:00" --before "2024-06-15 18:00:00" --format json --output incident.json
-
-# Find all activity during incident window (compressed archive)
-tl case_files.zip --after "2024-06-15 14:00:00" --before "2024-06-15 18:00:00" --format json
-
-# Process gzipped MFT from forensic tools
-tl \$MFT.gz --after "2024-06-15" --format csv --output extracted_timeline.csv
-```
-
-### Malware Hunting
-```bash
-# Search for suspicious files (live system)
-tl C: --filter "temp" --format human
-
-# Live system executable analysis
-tl C: --filter ".exe" --format json --output live_executables.json
-
-# Hunt malware in compressed evidence
-tl malware_sample.zip --filter "temp" --format human | grep DELETED
-
-# Export all executable files from compressed archive
-tl forensics_export.zip --filter ".exe" --format json --output executables.json
-
-# Process multiple compressed evidence files
-tl suspect_machine.zip --filter "powershell" --format csv --output powershell_activity.csv
-```
-
-### Evidence Processing
-```bash
-# Live system quick triage
-tl C: --filter "confidential" --format human
-
-# Process large enterprise MFT
-tl enterprise_mft.bin --format csv --output full_timeline.csv
-
-# Quick triage mode
-tl evidence.mft --single-pass --filter "confidential" --format human
-```
+**Performance Gains:**
+- ⚡ **12.5x faster** processing
+- 💾 **5.6x less memory** usage  
+- 🎯 **1000x better** timestamp precision (ns vs μs)
 
 ## 📈 Performance
 
@@ -316,6 +195,18 @@ tl evidence.mft --single-pass --filter "confidential" --format human
 | 100MB    | ~100K   | 850ms          | 45MB        |
 | 1GB      | ~1M     | 8.2s           | 180MB       |
 | 10GB     | ~10M    | 82s            | 950MB       |
+
+## 🔴 Live System Access
+
+### Requirements
+- Administrator privileges for raw disk access
+- Windows operating system with NTFS file system
+- Read-only access - no modification of system data
+
+### Supported Formats
+- **ZIP Archives**: Automatically extracts `$MFT.gz`, `$MFT`, or `mft.gz` files
+- **GZIP Files**: Direct decompression of `.gz` compressed MFT files
+- **Raw MFT Files**: Traditional uncompressed MFT files
 
 ## 🤝 Contributing
 
