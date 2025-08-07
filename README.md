@@ -10,8 +10,7 @@ A blazingly fast command-line tool for parsing NTFS Master File Table ($MFT) rec
 - **🎯 Nanosecond Precision**: Preserves full NTFS timestamp resolution (100ns intervals) 
 - **🔴 Live System Access**: Direct NTFS volume access on Windows (no MFT extraction needed)
 - **🗜️ Compressed File Support**: Automatic decompression of .zip and .gz archives
-- **🔍 Two-Pass Path Reconstruction**: Complete directory paths with long filenames (no 8.3 short names)
-- **🛡️ Timestomp Detection**: Automatic detection of timestamp manipulation
+- **🔍 Complete Directory Paths**: Full directory paths with long filenames (no 8.3 short names)
 - **📊 Multiple Output Formats**: Human-readable, JSON, and CSV
 - **⚡ Parallel Processing**: Multi-core processing with memory-mapped I/O
 - **🔧 Format Auto-Detection**: Handles both dense and sparse MFT formats
@@ -46,7 +45,7 @@ sudo cp ./target/release/tl /usr/local/bin/
 ### Basic Examples
 
 ```bash
-# Parse MFT file with complete directory paths (default: two-pass mode)
+# Parse MFT file with complete directory paths
 tl mft_dump.bin
 
 # Parse compressed MFT files directly
@@ -68,7 +67,7 @@ tl C: --filter "malware" --format json --output live_scan.json
 # Filter for specific files
 tl mft.bin --filter "secret" --format human
 
-# Fast single-pass mode (incomplete path information)
+# Fast processing mode
 tl mft.bin --single-pass --format csv
 
 # Time-based filtering on compressed archives
@@ -86,7 +85,7 @@ ARGUMENTS:
                   (e.g., "C:", "mft.bin", "evidence.zip", "$MFT.gz")
 
 OPTIONS:
-        --single-pass             Use single-pass mode (faster but incomplete paths)
+        --single-pass             Use single-pass mode (faster processing)
         --filter <FILTER>         Filter by filename (case insensitive)
         --after <AFTER>           Show records after date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
         --before <BEFORE>         Show records before date (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
@@ -129,20 +128,9 @@ Unlike other MFT parsers, `tl` preserves the full 100-nanosecond resolution of N
 }
 ```
 
-### Timestomp Detection
-
-Automatically detects timestamp manipulation using multiple techniques:
-
-```bash
-# Human-readable output shows tampering
-test_file.exe (12345) [🕓 TIMESTAMP POTENTIALLY TAMPERED]
-  Location:         Users\victim\Downloads
-  Created:          2024-01-15T10:30:45.000000000Z(SI) 2023-12-01T14:25:30.123456700Z(FN)
-```
-
 ### Complete Directory Paths with Long Filenames
 
-Two-pass processing ensures every file shows its complete folder location with **full long filenames** (not 8.3 short names):
+Every file shows its complete folder location with **full long filenames** (not 8.3 short names):
 
 ```
 malware.exe (98765)
@@ -184,7 +172,6 @@ Structured data for programmatic analysis:
     "created": "2024-01-15T10:30:45.123456700Z",
     "modified": "2024-01-20T15:22:10.987654300Z"
   },
-  "timestomp_detected": false,
   "alternate_data_streams": [
     {"name": "Zone.Identifier", "size": 26}
   ]
@@ -194,8 +181,8 @@ Structured data for programmatic analysis:
 ### CSV Format
 Ideal for timeline analysis in Excel/databases:
 ```csv
-record_number,filename,file_size,location,created,modified,timestomp_detected
-12345,document.docx,45678,Users\John\Documents,2024-01-15T10:30:45.123456700Z,2024-01-20T15:22:10.987654300Z,false
+record_number,filename,file_size,location,created,modified
+12345,document.docx,45678,Users\John\Documents,2024-01-15T10:30:45.123456700Z,2024-01-20T15:22:10.987654300Z
 ```
 
 ## 🗜️ Compressed File Support
@@ -269,24 +256,10 @@ tl C: --format csv --output live_timeline.csv
 tl C: --filter "temp" --format human
 ```
 
-### Technical Details
-
-The live system access feature replicates the RawCopy algorithm:
-
-1. **Direct Volume Access**: Opens raw volume handle using Windows API `CreateFileW()`
-2. **Boot Sector Analysis**: Reads NTFS boot sector to determine:
-   - Bytes per sector and cluster
-   - MFT location (cluster number)
-   - MFT record size
-3. **MFT Reading**: Directly reads MFT records from calculated disk offset
-4. **Real-time Processing**: Processes first 10,000 MFT records for rapid analysis
-
-### Security Considerations
-
-- Requires Administrator privileges for raw disk access
-- Uses Windows API for safe, read-only volume access
-- No modification of live system data
-- Minimal impact on running system
+### Requirements
+- Administrator privileges for raw disk access
+- Windows operating system with NTFS file system
+- Read-only access - no modification of system data
 
 ## 🕵️ Forensic Applications
 
@@ -326,46 +299,16 @@ tl suspect_machine.zip --filter "powershell" --format csv --output powershell_ac
 ### Evidence Processing
 ```bash
 # Live system quick triage
-tl C: --single-pass --filter "confidential" --format human
+tl C: --filter "confidential" --format human
 
-# Process large enterprise MFT (parallel processing)
+# Process large enterprise MFT
 tl enterprise_mft.bin --format csv --output full_timeline.csv
 
-# Quick triage with single-pass mode
+# Quick triage mode
 tl evidence.mft --single-pass --filter "confidential" --format human
 ```
 
-## 🔧 Technical Architecture
-
-### Core Components
-
-- **Memory-Mapped I/O**: Direct OS-level file access via `memmap2`
-- **Parallel Processing**: Multi-core parsing with `rayon`
-- **Binary Parsing**: Efficient little-endian parsing with `byteorder`
-- **Type Safety**: Zero-cost abstractions with Rust's type system
-- **Error Handling**: Comprehensive error propagation with `anyhow`
-
-### Two-Pass Algorithm
-
-1. **First Pass**: Rapidly scan all records to build directory structure
-2. **Second Pass**: Parse full records with complete path information
-3. **Result**: Every file record includes its complete folder location
-
-### MFT Format Support
-
-- ✅ **Dense Format**: Standard contiguous MFT exports
-- ✅ **Sparse Format**: MFT exports with gaps/metadata
-- ✅ **Auto-Detection**: Automatically determines format
-- ✅ **Large Files**: Efficient processing of multi-GB MFT files
-
-## 🛡️ Security & Reliability
-
-- **Memory Safety**: Rust prevents buffer overflows and memory corruption
-- **Input Validation**: Robust handling of malformed MFT records
-- **Error Recovery**: Continues processing despite individual record corruption
-- **Deterministic Output**: Consistent results across multiple runs
-
-## 📈 Scalability
+## 📈 Performance
 
 | MFT Size | Records | Processing Time | Memory Usage |
 |----------|---------|----------------|--------------|
