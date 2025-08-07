@@ -420,7 +420,30 @@ event.file_size.map_or("Unknown".to_string(), |s| {
 
     /// Draw the interface - optimized for speed
     fn draw(&mut self) -> io::Result<()> {
-        self.draw_main_interface()
+        self.draw_main_interface()?;
+        
+        // If in search mode, overlay the search prompt
+        if self.search_mode {
+            self.terminal.draw(|f| {
+                let area = f.area();
+                let prompt_text = format!("Search: {}_", self.search_query);
+                let search_paragraph = Paragraph::new(prompt_text)
+                    .style(Style::default().fg(Color::Yellow).bg(Color::DarkGray))
+                    .block(Block::default().borders(Borders::ALL).title("Search"));
+                    
+                let search_area = ratatui::layout::Rect {
+                    x: 0,
+                    y: area.height.saturating_sub(3),
+                    width: area.width,
+                    height: 3,
+                };
+                
+                f.render_widget(Clear, search_area); // Clear only the search area
+                f.render_widget(search_paragraph, search_area);
+            })?;
+        }
+        
+        Ok(())
     }
     
     /// Draw the main interface content
@@ -1135,8 +1158,7 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
         self.search_results.clear();
         self.current_search_index = 0;
         
-        // Draw search prompt
-        self.draw_search_prompt()?;
+        // No need to draw here - main draw loop will handle search overlay
         
         // Capture input until Enter or Escape
         loop {
@@ -1162,12 +1184,12 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
                         KeyCode::Backspace => {
                             if !self.search_query.is_empty() {
                                 self.search_query.pop();
-                                self.draw_search_prompt()?;
+                                self.draw()?;
                             }
                         },
                         KeyCode::Char(c) => {
                             self.search_query.push(c);
-                            self.draw_search_prompt()?;
+                            self.draw()?;
                         },
                         _ => {}
                     }
@@ -1175,33 +1197,6 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
                 }
             }
         }
-        
-        Ok(())
-    }
-    
-    /// Draw search prompt as overlay on current screen
-    fn draw_search_prompt(&mut self) -> io::Result<()> {
-        // Draw the main interface first, then overlay search prompt
-        self.draw_main_interface()?;
-        
-        // Overlay the search prompt
-        self.terminal.draw(|f| {
-            let area = f.area();
-            let prompt_text = format!("Search: {}_", self.search_query);
-            let search_paragraph = Paragraph::new(prompt_text)
-                .style(Style::default().fg(Color::Yellow).bg(Color::DarkGray))
-                .block(Block::default().borders(Borders::ALL).title("Search"));
-                
-            let search_area = ratatui::layout::Rect {
-                x: 0,
-                y: area.height.saturating_sub(3),
-                width: area.width,
-                height: 3,
-            };
-            
-            f.render_widget(Clear, search_area); // Clear only the search area
-            f.render_widget(search_paragraph, search_area);
-        })?;
         
         Ok(())
     }
