@@ -1,11 +1,15 @@
 //! Ultra-high-performance MFT parsing with SIMD, parallel processing, and memory optimizations
 
 use crate::error::{Error, Result};
-use crate::types::{MftRecord, MftTimestamps};
+use crate::types::{Event, EventTimestamps};
 use crate::simd_optimize::{
     StringPool, scan_record_boundaries_simd,
     find_attributes_simd, convert_timestamps_simd, apply_fixups_simd
 };
+use crate::cli::InputType;
+use crate::jumplist::JumplistParser;
+use crate::lnk_parser::LnkParser;
+use crate::registry::RegistryParser;
 use std::io::{Cursor, Read};
 use std::path::Path;
 use std::sync::Arc;
@@ -124,7 +128,7 @@ pub struct FileNameAttribute {
 /// Streaming parser result
 #[derive(Debug)]
 pub struct StreamingResult {
-    pub records: Vec<MftRecord>,
+    pub records: Vec<Event>,
     pub progress: f64,
     pub total_processed: usize,
     pub errors: usize,
@@ -187,9 +191,81 @@ impl MftParser {
             false
         }
     }
+
+    /// Detect input file type based on extension and content
+    fn detect_input_type(path: &Path) -> Result<InputType> {
+        let extension = path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        
+        match extension.as_str() {
+            "lnk" => Ok(InputType::Lnk),
+            "dat" => {
+                let filename = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if filename.contains("ntuser") || filename.contains("system") || 
+                   filename.contains("software") || filename.contains("sam") || 
+                   filename.contains("security") {
+                    Ok(InputType::Registry)
+                } else {
+                    Ok(InputType::Mft)
+                }
+            },
+            "ms" => {
+                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if filename.ends_with(".automaticDestinations-ms") {
+                    Ok(InputType::AutomaticDestinations)
+                } else if filename.ends_with(".customDestinations-ms") {
+                    Ok(InputType::CustomDestinations)
+                } else {
+                    Err(Error::InvalidInput(format!("Unknown .ms file type: {}", filename)))
+                }
+            },
+            "mft" | "bin" | "gz" => Ok(InputType::Mft),
+            _ => {
+                let filename = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if filename.contains("automaticDestinations") {
+                    Ok(InputType::AutomaticDestinations)
+                } else if filename.contains("customDestinations") {
+                    Ok(InputType::CustomDestinations)
+                } else if filename.contains("ntuser") {
+                    Ok(InputType::Registry)
+                } else if filename.contains("$mft") {
+                    Ok(InputType::Mft)
+                } else {
+                    Ok(InputType::Mft)
+                }
+            }
+        }
+    }
     
-    /// Parse input from file path with memory mapping for large files
-    pub fn parse_input(&mut self, path: &Path, _password: Option<&str>) -> Result<Vec<MftRecord>> {
+    /// Parse input from file path - dispatches to appropriate parser based on file type
+    pub fn parse_input(&mut self, path: &Path, password: Option<&str>) -> Result<Vec<Event>> {
+        // Detect input file type
+        let input_type = Self::detect_input_type(path)?;
+        
+        match input_type {
+            InputType::Mft => self.parse_mft_file(path),
+            InputType::Lnk => self.parse_lnk_file(path),
+            InputType::AutomaticDestinations | InputType::CustomDestinations => {
+                self.parse_jumplist_file(path, input_type)
+            },
+            InputType::Registry => self.parse_registry_file(path),
+            _ => {
+                // Default to MFT parsing for unknown types
+                self.parse_mft_file(path)
+            }
+        }
+    }
+
+    /// Parse MFT file with memory mapping for large files
+    fn parse_mft_file(&mut self, path: &Path) -> Result<Vec<Event>> {
         let file = std::fs::File::open(path)?;
         let metadata = file.metadata()?;
         
@@ -203,7 +279,7 @@ impl MftParser {
     }
     
     /// Memory-mapped parsing for large files
-    fn parse_mmap(&mut self, path: &Path) -> Result<Vec<MftRecord>> {
+    fn parse_mmap(&mut self, path: &Path) -> Result<Vec<Event>> {
         let file = std::fs::File::open(path)?;
         let mmap = unsafe { memmap2::Mmap::map(&file)? };
         
@@ -217,9 +293,79 @@ impl MftParser {
         
         result
     }
+
+    /// Parse LNK file and extract timeline events
+    fn parse_lnk_file(&mut self, path: &Path) -> Result<Vec<Event>> {
+        let data = std::fs::read(path)?;
+        let lnk_parser = LnkParser::new();
+        let shell_link = match lnk_parser.parse_lnk_data(&data) {
+            Ok(link) => link,
+            Err(e) => {
+                eprintln!("⚠️  Failed to parse LNK file {}: {}", path.display(), e);
+                return Ok(Vec::new()); // Skip invalid LNK files instead of failing
+            }
+        };
+        
+        // Convert shell link to Event format
+        let mut records = Vec::new();
+        
+        if let Some(record) = Self::shell_link_to_mft_record(&shell_link, path)? {
+            records.push(record);
+        }
+        
+        Ok(records)
+    }
+
+    /// Parse jumplist file and extract timeline events
+    fn parse_jumplist_file(&mut self, path: &Path, jumplist_type: InputType) -> Result<Vec<Event>> {
+        let data = std::fs::read(path)?;
+        let jumplist_parser = JumplistParser::new();
+        
+        let jumplist_entries = match jumplist_type {
+            InputType::AutomaticDestinations => {
+                jumplist_parser.parse_automatic_destinations(&data)?
+            },
+            InputType::CustomDestinations => {
+                jumplist_parser.parse_custom_destinations(&data)?
+            },
+            _ => return Err(Error::InvalidInput("Invalid jumplist type".to_string())),
+        };
+        
+        // Convert jumplist entries to Event format
+        let mut records = Vec::new();
+        
+        for entry in jumplist_entries {
+            if let Some(record) = Self::jumplist_entry_to_mft_record(&entry, path)? {
+                records.push(record);
+            }
+        }
+        
+        Ok(records)
+    }
+
+    /// Parse registry file and extract timeline events
+    fn parse_registry_file(&mut self, path: &Path) -> Result<Vec<Event>> {
+        let data = std::fs::read(path)?;
+        let registry_parser = RegistryParser::new();
+        let registry_hive = registry_parser.parse_registry_data(&data, path)?;
+        
+        // Extract timeline events from registry
+        let registry_events = registry_parser.extract_timeline_events(&registry_hive)?;
+        
+        // Convert registry events to Event format
+        let mut records = Vec::new();
+        
+        for event in registry_events {
+            if let Some(record) = Self::registry_event_to_mft_record(&event, path)? {
+                records.push(record);
+            }
+        }
+        
+        Ok(records)
+    }
     
     /// Parse MFT data with maximum optimizations
-    pub fn parse_mft_data(&mut self, data: &[u8]) -> Result<Vec<MftRecord>> {
+    pub fn parse_mft_data(&mut self, data: &[u8]) -> Result<Vec<Event>> {
         if data.len() > PROCESSING_CHUNK_SIZE * 4 && self.parallel_threads > 1 {
             self.parse_mft_data_parallel(data)
         } else {
@@ -228,7 +374,7 @@ impl MftParser {
     }
     
     /// High-performance parallel parsing
-    fn parse_mft_data_parallel(&mut self, data: &[u8]) -> Result<Vec<MftRecord>> {
+    fn parse_mft_data_parallel(&mut self, data: &[u8]) -> Result<Vec<Event>> {
         eprintln!("🚀 Using parallel MFT parser ({} threads, SIMD: {})", 
                  self.parallel_threads, self.use_simd);
         
@@ -244,6 +390,12 @@ impl MftParser {
         eprintln!("📍 Found {} potential MFT records in {:?}", 
                  boundaries.len(), start_time.elapsed());
         
+        // Handle case where no records are found
+        if boundaries.is_empty() {
+            eprintln!("⚠️  No MFT records found in data");
+            return Ok(Vec::new());
+        }
+        
         // Step 2: Parallel parsing with work-stealing
         let boundary_chunks: Vec<_> = boundaries
             .chunks((boundaries.len() + self.parallel_threads - 1) / self.parallel_threads)
@@ -254,7 +406,7 @@ impl MftParser {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let threads_completed = Arc::new(AtomicUsize::new(0));
         
-        let records: std::result::Result<Vec<Vec<MftRecord>>, Error> = boundary_chunks
+        let records: std::result::Result<Vec<Vec<Event>>, Error> = boundary_chunks
             .into_par_iter()
             .map(|chunk_boundaries| {
                 let mut chunk_records = Vec::with_capacity(chunk_boundaries.len());
@@ -291,7 +443,7 @@ impl MftParser {
             })
             .collect();
         
-        let mut all_records: Vec<MftRecord> = records?
+        let mut all_records: Vec<Event> = records?
             .into_iter()
             .flatten()
             .collect();
@@ -309,7 +461,7 @@ impl MftParser {
     }
     
     /// Sequential parsing for smaller files  
-    fn parse_mft_data_sequential(&mut self, data: &[u8]) -> Result<Vec<MftRecord>> {
+    fn parse_mft_data_sequential(&mut self, data: &[u8]) -> Result<Vec<Event>> {
         eprintln!("🚀 Using sequential MFT parser (SIMD: {})", self.use_simd);
         
         let mut parsed_records = Vec::with_capacity(data.len() / MFT_RECORD_SIZE);
@@ -383,7 +535,7 @@ impl MftParser {
     
     /// Ultra-fast single entry parsing with aggressive optimizations
     #[inline(always)]
-    fn parse_single_entry_fast(&self, buffer: &[u8], entry_number: u64) -> Result<Option<MftRecord>> {
+    fn parse_single_entry_fast(&self, buffer: &[u8], entry_number: u64) -> Result<Option<Event>> {
         // Fast signature check first
         if buffer.len() < 4 {
             return Ok(None);
@@ -501,8 +653,8 @@ impl MftParser {
     
     /// Fast record conversion with caching and string pooling
     #[inline(always)]
-    fn convert_entry_to_record_fast(&self, header: &EntryHeader, data: &[u8]) -> Result<Option<MftRecord>> {
-        let mut record = MftRecord::default();
+    fn convert_entry_to_record_fast(&self, header: &EntryHeader, data: &[u8]) -> Result<Option<Event>> {
+        let mut record = Event::default();
         
         // Basic record info
         record.record_number = header.record_number;
@@ -510,6 +662,7 @@ impl MftParser {
         record.link_count = Some(header.hard_link_count);
         record.is_directory = header.flags.contains(EntryFlags::INDEX_PRESENT);
         record.is_deleted = !header.flags.contains(EntryFlags::ALLOCATED);
+        record.event_source = Some("MFT".to_string());
         
         // Fast attribute parsing with SIMD optimization
         self.parse_attributes_fast(data, header, &mut record)?;
@@ -519,7 +672,7 @@ impl MftParser {
     
     /// SIMD-accelerated attribute parsing
     #[inline(always)]
-    fn parse_attributes_fast(&self, data: &[u8], header: &EntryHeader, record: &mut MftRecord) -> Result<()> {
+    fn parse_attributes_fast(&self, data: &[u8], header: &EntryHeader, record: &mut Event) -> Result<()> {
         // Find all attributes we care about in one pass
         let target_types = [0x10u32, 0x30u32, 0x80u32]; // SI, FN, DATA
         let attributes = if self.use_simd {
@@ -563,7 +716,7 @@ impl MftParser {
             record.filename = Some(filename_attr.name.to_string());
             record.parent_directory = Some(filename_attr.parent_entry);
             
-            record.fn_timestamps = MftTimestamps {
+            record.fn_timestamps = EventTimestamps {
                 created: filename_attr.created,
                 modified: filename_attr.modified,
                 mft_modified: filename_attr.mft_modified,
@@ -613,14 +766,14 @@ impl MftParser {
     
     /// Fast STANDARD_INFORMATION parsing
     #[inline(always)]
-    fn parse_standard_information_fast(&self, attr_data: &[u8]) -> Result<MftTimestamps> {
+    fn parse_standard_information_fast(&self, attr_data: &[u8]) -> Result<EventTimestamps> {
         if attr_data.len() < 24 || attr_data[8] != 0 {
-            return Ok(MftTimestamps::default());
+            return Ok(EventTimestamps::default());
         }
         
         let content_offset = u16::from_le_bytes([attr_data[20], attr_data[21]]) as usize;
         if content_offset + 32 > attr_data.len() {
-            return Ok(MftTimestamps::default());
+            return Ok(EventTimestamps::default());
         }
         
         let content = &attr_data[content_offset..];
@@ -639,7 +792,7 @@ impl MftParser {
             timestamps.iter().map(|&ft| self.convert_filetime_fast(ft)).collect()
         };
         
-        Ok(MftTimestamps {
+        Ok(EventTimestamps {
             created: converted.get(0).copied().unwrap_or(None),
             modified: converted.get(1).copied().unwrap_or(None),
             mft_modified: converted.get(2).copied().unwrap_or(None),
@@ -770,7 +923,7 @@ impl MftParser {
     }
     
     /// Parallel directory path building with proper two-pass processing
-    fn build_directory_paths_parallel(&self, records: &mut [MftRecord]) {
+    fn build_directory_paths_parallel(&self, records: &mut [Event]) {
         // First pass: Store lightweight path info for all records
         records.par_iter()
             .for_each(|record| {
@@ -791,7 +944,7 @@ impl MftParser {
     }
     
     /// Sequential directory path building with proper two-pass processing
-    fn build_directory_paths_sequential(&self, records: &mut [MftRecord]) {
+    fn build_directory_paths_sequential(&self, records: &mut [Event]) {
         // First pass: Store lightweight path info for all records
         for record in records.iter() {
             if let Some(filename) = &record.filename {
@@ -868,6 +1021,120 @@ impl MftParser {
             // Record not found
             format!("[NotFound-{}]", entry_id)
         }
+    }
+
+    /// Convert Shell Link to Event format
+    fn shell_link_to_mft_record(
+        shell_link: &crate::lnk_parser::ShellLink, 
+        source_path: &Path
+    ) -> Result<Option<Event>> {
+        // For LNK files, the filename should be the target executable/file name only
+        let target_path = shell_link.target_path.clone().unwrap_or_else(|| "Unknown".to_string());
+        let filename = if target_path == "Unknown" {
+            "Unknown".to_string()
+        } else {
+            // Extract just the filename from the Windows path using backslash splitting
+            // std::path::Path doesn't work well with Windows paths on non-Windows systems
+            target_path.split('\\').last().unwrap_or(&target_path).to_string()
+        };
+            
+        // Location should be the full target path for the "Full Path" column
+        let location = target_path;
+
+        let record = Event {
+            record_number: 0, // LNK files use 🔗 instead of record numbers
+            sequence_number: 0,
+            filename: Some(filename), // Remove "LNK: " prefix
+            file_size: Some(shell_link.header.file_size as u64),
+            allocated_size: Some(shell_link.header.file_size as u64),
+            is_directory: false,
+            is_deleted: false,
+            link_count: Some(1),
+            parent_directory: None,
+            timestamps: shell_link.timestamps.clone(),
+            fn_timestamps: EventTimestamps::default(), // LNK files don't have FILE_NAME attributes (N/A)
+            alternate_data_streams: Vec::new(),
+            location: Some(location), // Use target path as location
+            event_source: Some("LNK".to_string()),
+        };
+
+        Ok(Some(record))
+    }
+
+    /// Convert Jumplist Entry to Event format
+    fn jumplist_entry_to_mft_record(
+        entry: &crate::jumplist::JumplistEntry, 
+        source_path: &Path
+    ) -> Result<Option<Event>> {
+        let filename = entry.target_path.clone()
+            .unwrap_or_else(|| "Unknown Jumplist Entry".to_string());
+
+        let location = source_path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let jumplist_type = if source_path.to_string_lossy().contains("automaticDestinations") {
+            "AutoDest"
+        } else {
+            "CustomDest"
+        };
+
+        let record = Event {
+            record_number: 0, // Jumplist entries don't have MFT record numbers
+            sequence_number: 0,
+            filename: Some(format!("{}: {}", jumplist_type, filename)),
+            file_size: Some(entry.file_size.unwrap_or(0)),
+            allocated_size: Some(entry.file_size.unwrap_or(0)),
+            is_directory: false,
+            is_deleted: false,
+            link_count: Some(1),
+            parent_directory: None,
+            timestamps: entry.timestamps.clone(),
+            fn_timestamps: EventTimestamps::default(), // Jumplist files don't have FILE_NAME attributes (N/A)
+            alternate_data_streams: Vec::new(),
+            location: Some(format!("{} [Source: {}]", location, source_path.to_string_lossy())),
+            event_source: Some("Jumplist".to_string()),
+        };
+
+        Ok(Some(record))
+    }
+
+    /// Convert Registry Event to Event format
+    fn registry_event_to_mft_record(
+        event: &crate::registry::RegistryTimelineEvent, 
+        source_path: &Path
+    ) -> Result<Option<Event>> {
+        let key_path = &event.key_path;
+        let default_value = "(Default)".to_string();
+        let value_name = event.value_name.as_ref().unwrap_or(&default_value);
+        let filename = format!("REG: {}\\{}", key_path, value_name);
+
+        let location = source_path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let hive_name = source_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let record = Event {
+            record_number: 0, // Registry events don't have MFT record numbers
+            sequence_number: 0,
+            filename: Some(filename),
+            file_size: Some(event.data_size.unwrap_or(0) as u64),
+            allocated_size: Some(event.data_size.unwrap_or(0) as u64),
+            is_directory: false,
+            is_deleted: false,
+            link_count: Some(1),
+            parent_directory: None,
+            timestamps: event.timestamps.clone(),
+            fn_timestamps: EventTimestamps::default(), // Registry events don't have FILE_NAME attributes (N/A)
+            alternate_data_streams: Vec::new(),
+            location: Some(format!("{} [Hive: {}, Source: {}]", location, hive_name, source_path.to_string_lossy())),
+            event_source: Some("Registry".to_string()),
+        };
+
+        Ok(Some(record))
     }
 }
 

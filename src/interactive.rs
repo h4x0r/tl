@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind},
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal,
 };
@@ -18,7 +18,7 @@ use ratatui::{
     Terminal,
 };
 use std::io::{self, Stdout};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 /// Format a number with comma separators
 fn format_number_with_commas(mut num: u64) -> String {
@@ -106,7 +106,7 @@ pub struct FormattedRow {
 pub struct InteractiveViewer {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     events: Vec<TimelineEvent>,
-    records: Vec<crate::types::MftRecord>,
+    records: Vec<crate::types::Event>,
     formatted_rows: Vec<FormattedRow>, // Pre-formatted data for fast rendering
     table_state: TableState,
     horizontal_scroll: usize,
@@ -133,7 +133,7 @@ pub struct InteractiveViewer {
 
 impl InteractiveViewer {
     /// Create a new interactive viewer (legacy - slow startup)
-    pub fn new(events: Vec<TimelineEvent>, records: Vec<crate::types::MftRecord>, timezone: Tz, data_source: String, total_timeline_events: usize) -> io::Result<Self> {
+    pub fn new(events: Vec<TimelineEvent>, records: Vec<crate::types::Event>, timezone: Tz, data_source: String, total_timeline_events: usize) -> io::Result<Self> {
         // Setup terminal
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -147,7 +147,8 @@ impl InteractiveViewer {
 
         // Get terminal size
         let size = terminal.size()?;
-        let viewport_size = (size.height as usize).saturating_sub(2); // Account for header/footer
+        // Account for: Header(1) + Table header(1) + Details pane(12) + Footer(1) = 15 total
+        let viewport_size = (size.height as usize).saturating_sub(15);
 
         // Pre-format all data for fast rendering
         let formatted_rows = Self::preformat_events(&events, &records, timezone);
@@ -181,7 +182,7 @@ impl InteractiveViewer {
     }
 
     /// Create a new interactive viewer with fast startup (lazy loading)
-    pub fn new_fast(records: Vec<crate::types::MftRecord>, timezone: Tz, data_source: String, total_timeline_events: usize) -> io::Result<Self> {
+    pub fn new_fast(records: Vec<crate::types::Event>, timezone: Tz, data_source: String, total_timeline_events: usize) -> io::Result<Self> {
         // Don't setup terminal yet - wait until after timeline is built
         let mut table_state = TableState::default();
         table_state.select(Some(0));
@@ -200,7 +201,7 @@ impl InteractiveViewer {
             terminal_height: 24, // Default - will be updated when terminal is initialized
             data_source,
             viewport_start: 0,
-            viewport_size: 22, // Default - will be updated when terminal is initialized
+            viewport_size: 9, // Conservative default - will be updated when terminal is initialized
             current_column: 0,
             total_timeline_events,
             timezone,
@@ -241,9 +242,6 @@ impl InteractiveViewer {
                             KeyResult::Continue => {}
                         }
                     }
-                    Event::Mouse(mouse) => {
-                        self.handle_mouse_event(mouse);
-                    }
                     _ => {}
                 }
             }
@@ -254,8 +252,7 @@ impl InteractiveViewer {
         execute!(
             self.terminal.backend_mut(),
             terminal::LeaveAlternateScreen,
-            cursor::Show,
-            event::DisableMouseCapture
+            cursor::Show
         )?;
 
         Ok(())
@@ -265,7 +262,7 @@ impl InteractiveViewer {
     fn setup_terminal(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide, event::EnableMouseCapture)?;
+        execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
         let backend = CrosstermBackend::new(stdout);
         self.terminal = Terminal::new(backend)?;
         
@@ -273,7 +270,8 @@ impl InteractiveViewer {
         let size = self.terminal.size()?;
         self.terminal_width = size.width;
         self.terminal_height = size.height;
-        self.viewport_size = (size.height as usize).saturating_sub(2);
+        // Account for: Header(1) + Table header(1) + Details pane(12) + Footer(1) = 15 total
+        self.viewport_size = (size.height as usize).saturating_sub(15);
         
         Ok(())
     }
@@ -363,13 +361,13 @@ impl InteractiveViewer {
     }
 
     /// Pre-format events with progress bar using the ultra-fast formatter
-    fn preformat_events_with_progress(&self, events: &[TimelineEvent], records: &[crate::types::MftRecord]) -> Vec<FormattedRow> {
+    fn preformat_events_with_progress(&self, events: &[TimelineEvent], records: &[crate::types::Event]) -> Vec<FormattedRow> {
         // Use the ultra-fast formatter from fast_formatter module
         crate::fast_formatter::format_events_ultra_fast(events, records, self.timezone)
     }
 
     /// Pre-format all events for fast rendering (legacy method)
-    fn preformat_events(events: &[TimelineEvent], records: &[crate::types::MftRecord], timezone: Tz) -> Vec<FormattedRow> {
+    fn preformat_events(events: &[TimelineEvent], records: &[crate::types::Event], timezone: Tz) -> Vec<FormattedRow> {
         // Create a HashMap for O(1) MFT record lookup
         let mut record_map = std::collections::HashMap::new();
         for record in records {
@@ -384,11 +382,20 @@ impl InteractiveViewer {
                     crate::datetime::format_timestamp_human(&converted_time)
                 };
                 
-                let timestamp_type_with_source = format!("{} ({})", 
-                    event.timestamp_type.display_name(),
-                    event.timestamp_source.short_form()
-                );
-                let record = event.mft_record_number.to_string();
+                let timestamp_type_with_source = if event.event_source.as_deref() == Some("LNK") {
+                    // For LNK events, don't include the timestamp source information
+                    event.timestamp_type.display_name_for_source(event.event_source.as_deref()).to_string()
+                } else {
+                    format!("{} ({})", 
+                        event.timestamp_type.display_name_for_source(event.event_source.as_deref()),
+                        event.timestamp_source.short_form()
+                    )
+                };
+                let record = if event.event_source.as_deref() == Some("LNK") {
+                    "🔗".to_string()  // Use link emoji for LNK files
+                } else {
+                    event.mft_record_number.to_string()
+                };
                 
                 // Use file size and directory info directly from TimelineEvent
                 let formatted_size = if event.is_directory {
@@ -438,7 +445,8 @@ event.file_size.map_or("Unknown".to_string(), |s| {
         if size.width != self.terminal_width || size.height != self.terminal_height {
             self.terminal_width = size.width;
             self.terminal_height = size.height;
-            self.viewport_size = (size.height as usize).saturating_sub(2);
+            // Account for: Header(1) + Table header(1) + Details pane(12) + Footer(1) = 15 total
+            self.viewport_size = (size.height as usize).saturating_sub(15);
         }
 
         // Collect minimal data for drawing
@@ -514,11 +522,9 @@ self.terminal.draw(|f| {
 // Create properly aligned column cells with vertical line separators
                     let filename_text = if formatted_row.is_deleted {
                         // Add strikethrough using Unicode combining character for better terminal compatibility
-                        // Also add [DELETED] prefix for clarity
-                        let strikethrough_name = formatted_row.filename.chars()
+                        formatted_row.filename.chars()
                             .map(|c| format!("{}\u{0336}", c))
-                            .collect::<String>();
-                        format!("[DEL] {}", strikethrough_name)
+                            .collect::<String>()
                     } else {
                         formatted_row.filename.clone()
                     };
@@ -561,8 +567,8 @@ self.terminal.draw(|f| {
                                 // Black background, keep original text color
                                 base_style.bg(Color::Black)
                             } else if is_deleted {
-                                // Dim the text for deleted files
-                                base_style.add_modifier(Modifier::DIM).fg(Color::DarkGray)
+                                // Dim deleted files to a lighter gray
+                                base_style.fg(Color::Rgb(140, 140, 140))
                             } else {
                                 base_style
                             };
@@ -582,8 +588,8 @@ self.terminal.draw(|f| {
                                 // Black background, keep original text color
                                 base_style.bg(Color::Black)
                             } else if is_deleted {
-                                // Dim the text for deleted files with strikethrough effect
-                                base_style.add_modifier(Modifier::DIM).fg(Color::DarkGray)
+                                // Dim deleted files to a lighter gray
+                                base_style.fg(Color::Rgb(140, 140, 140))
                             } else {
                                 base_style
                             };
@@ -716,7 +722,7 @@ self.terminal.draw(|f| {
     
     
     /// Build the content string for the details popup
-    fn build_details_content(&self, record: &crate::types::MftRecord, _event: &TimelineEvent) -> String {
+    fn build_details_content(&self, record: &crate::types::Event, _event: &TimelineEvent) -> String {
         let mut content = String::new();
         
         // Debug: Check if we actually have timestamp data (unused for now)
@@ -804,7 +810,7 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
                 let converted = crate::datetime::convert_to_timezone(*ts, timezone);
                 crate::datetime::format_timestamp_human(&converted)
             }
-            None => "<not set>".to_string(),
+            None => "N/A".to_string(),
         }
     }
 
@@ -943,42 +949,6 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
         }
     }
 
-    /// Handle mouse input
-    fn handle_mouse_event(&mut self, mouse: MouseEvent) {
-        match mouse.kind {
-            MouseEventKind::ScrollDown => {
-                for _ in 0..3 {  // Scroll 3 lines at a time
-                    self.next_item();
-                }
-            }
-            MouseEventKind::ScrollUp => {
-                for _ in 0..3 {  // Scroll 3 lines at a time
-                    self.previous_item();
-                }
-            }
-            MouseEventKind::Down(_) => {
-                // Handle clicking on table rows
-                let click_y = mouse.row as usize;
-                let terminal_height = self.terminal_height as usize;
-                
-                // Layout: Header(1) + Table + Details(12) + Footer(1)
-                // Table area ends at: terminal_height - 12 (details) - 1 (footer) = terminal_height - 13
-                let table_end_y = terminal_height.saturating_sub(13);
-                
-                // Data rows start at row 2 (after app header + table header)
-                if click_y >= 2 && click_y < table_end_y {
-                    let table_data_row = click_y.saturating_sub(2);
-                    let absolute_row = self.viewport_start + table_data_row;
-                    
-                    // Make sure the clicked row is within bounds
-                    if absolute_row < self.filtered_events.len() {
-                        self.table_state.select(Some(absolute_row));
-                    }
-                }
-            }
-            _ => {} // Ignore other mouse events
-        }
-    }
 
     /// Move to previous item
     fn previous_item(&mut self) {
@@ -1113,22 +1083,35 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
     }
 
 
-    /// Truncate text to fit column width
+    /// Calculate visual width accounting for strikethrough combining characters
+    fn visual_width(text: &str) -> usize {
+        text.chars()
+            .filter(|&c| c != '\u{0336}') // Filter out strikethrough combining characters
+            .map(|c| c.width().unwrap_or(0))
+            .sum()
+    }
+
+    /// Truncate text to fit column width, accounting for strikethrough
     fn truncate_text(text: &str, max_width: usize) -> String {
-        if text.width() <= max_width {
+        if Self::visual_width(text) <= max_width {
             text.to_string()
         } else {
             let mut truncated = String::new();
-            let mut width = 0;
+            let mut visual_width = 0;
             
             for ch in text.chars() {
-                let ch_width = ch.width().unwrap_or(0);
-                if width + ch_width + 3 > max_width { // +3 for "..."
-                    truncated.push_str("...");
-                    break;
+                if ch == '\u{0336}' {
+                    // Always add combining characters (zero width)
+                    truncated.push(ch);
+                } else {
+                    let ch_width = ch.width().unwrap_or(0);
+                    if visual_width + ch_width + 3 > max_width { // +3 for "..."
+                        truncated.push_str("...");
+                        break;
+                    }
+                    truncated.push(ch);
+                    visual_width += ch_width;
                 }
-                truncated.push(ch);
-                width += ch_width;
             }
             
             truncated
@@ -1161,28 +1144,35 @@ record.file_size.map_or("Unknown".to_string(), |s| format!("{} bytes", s))
         let scroll_offset = if col_index == current_col { global_scroll } else { 0 };
         let content = Self::truncate_with_scroll(text, content_width, scroll_offset);
         
-        // Pad to exact content width and add dim separator (total = width)
-        format!("{:<content_width$}┆", content, content_width = content_width)
+        // Calculate padding needed based on visual width, not string length
+        let visual_width = Self::visual_width(&content);
+        let padding_needed = content_width.saturating_sub(visual_width);
+        
+        // Add content, manual padding, and separator
+        format!("{}{}┆", content, " ".repeat(padding_needed))
     }
     
 /// Format timestamp column with special handling to preserve full timestamp width
     fn format_timestamp_column(text: &str, col_index: usize, current_col: usize, global_scroll: usize) -> String {
         let scroll_offset = if col_index == current_col { global_scroll } else { 0 };
         
-        // For timestamp, show full content with proper padding and dim separator
         let content = if scroll_offset == 0 {
-            // No scrolling - show full timestamp, pad to 41 chars + separator = 42 total
-            format!("{:<41}┆", text)
+            text.to_string()
         } else {
             // Apply scrolling by taking substring
             if scroll_offset >= text.len() {
-                format!("{:<41}┆", "")
+                String::new()
             } else {
-                format!("{:<41}┆", &text[scroll_offset..])
+                text[scroll_offset..].to_string()
             }
         };
         
-        content
+        // Calculate padding needed based on visual width, not string length
+        let visual_width = Self::visual_width(&content);
+        let padding_needed = 41_usize.saturating_sub(visual_width);
+        
+        // Add content, manual padding, and separator (total 42 chars)
+        format!("{}{}┆", content, " ".repeat(padding_needed))
     }
     
     /// Format the last column without separator, applying scrolling only if it's the current column

@@ -24,6 +24,8 @@ pub enum Error {
     InvalidInput(String),
     /// Authentication/permission errors
     AccessDenied(String),
+    /// File parsing errors (LNK, Registry, Jumplist)
+    ParseError(String),
 }
 
 impl fmt::Display for Error {
@@ -39,6 +41,7 @@ impl fmt::Display for Error {
             Error::WindowsApi(msg) => write!(f, "Windows API error: {}", msg),
             Error::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
             Error::AccessDenied(msg) => write!(f, "Access denied: {}", msg),
+            Error::ParseError(msg) => write!(f, "Parse error: {}", msg),
         }
     }
 }

@@ -185,7 +185,7 @@ pub fn timestamp_in_range(
 
 /// Check if any timestamp in an MFT record falls within the specified range
 pub fn record_in_date_range(
-    record: &crate::types::MftRecord,
+    record: &crate::types::Event,
     after: &Option<DateTime<Utc>>,
     before: &Option<DateTime<Utc>>,
 ) -> bool {

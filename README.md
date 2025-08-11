@@ -1,19 +1,23 @@
-# tl (Timeline) - High-Performance NTFS MFT Parser
+# tl (Timeline) - High-Performance Forensic Timeline Generator
 
 **Author:** Albert Hui <albert@securityronin.com>
 
-A blazingly fast command-line tool for parsing NTFS Master File Table ($MFT) records from compressed archives (.zip, .gz), extracted MFT files, or live NTFS volumes. Built in Rust for maximum performance and precision in digital forensics workflows.
+A blazingly fast command-line forensic timeline generator supporting multiple Windows artifacts including NTFS Master File Table ($MFT), LNK files, Windows jumplists, and registry MRU locations. Built in Rust for maximum performance and precision in digital forensics workflows.
 
 ## 🚀 Key Features
 
-- **🔥 High Performance**: 12.5x faster than Python implementations
+- **🔥 High Performance**: 12.5x faster than Python implementations with parallel processing
 - **🎯 Nanosecond Precision**: Preserves full NTFS timestamp resolution (100ns intervals) 
+- **📁 Multiple Artifact Types**: MFT, LNK files, jumplists (.automaticDestinations-ms/.customDestinations-ms), registry hives
+- **🔍 Registry MRU Parsing**: Extracts Most Recently Used entries from NTUSER.DAT and other hives
+- **🔗 LNK File Analysis**: Parse Windows shortcuts with full metadata and target information
+- **📋 Jumplist Support**: Windows 7+ automatic and custom destination file parsing
 - **🔴 Live System Access**: Direct NTFS volume access on Windows (no MFT extraction needed)
-- **🗜️ Compressed File Support**: Automatic decompression of .zip and .gz archives
+- **🗜️ Container Archive Support**: ZIP archives, E01 Expert Witness format, and raw disk images (.dd, .raw, .img)
 - **📊 Multiple Output Formats**: Interactive TUI viewer, JSON, and CSV
 - **⚡ Parallel Processing**: Multi-core processing with memory-mapped I/O
 - **🔧 Format Auto-Detection**: Handles both dense and sparse MFT formats
-- **💾 Memory Efficient**: Processes large MFT files without excessive RAM usage
+- **💾 Memory Efficient**: Processes large files without excessive RAM usage
 
 ## 📋 Requirements
 
@@ -43,11 +47,13 @@ sudo cp ./target/release/tl /usr/local/bin/
 
 ```
 USAGE:
-    tl [OPTIONS] [MFT_FILE]
+    tl [OPTIONS] [INPUT_FILE]
 
 ARGUMENTS:
-    <MFT_FILE>    MFT file path (.mft, .zip, .gz), or drive letter for live system access
-                  (e.g., "C:", "mft.bin", "evidence.zip", "$MFT.gz")
+    <INPUT_FILE>    Input file - supports MFT (.mft, .zip, .gz), LNK (.lnk), 
+                    Jumplist (.automaticDestinations-ms, .customDestinations-ms), 
+                    Registry (NTUSER.DAT), or drive letter for live system access
+                    (e.g., "C:", "mft.bin", "evidence.zip", "NTUSER.DAT", "shortcut.lnk")
 
 OPTIONS:
         --single-pass             Use single-pass mode (faster processing)
@@ -62,19 +68,32 @@ OPTIONS:
 
 ## 📚 Examples & Use Cases
 
-### Basic MFT Parsing
+### Multiple Artifact Types
 
 ```bash
 # Parse MFT file (opens interactive viewer by default)
 tl mft_dump.bin
 
-# Parse compressed files directly
-tl evidence.zip
-tl $MFT.gz
+# Parse LNK files for shortcut analysis
+tl shortcut.lnk --format json --output link_analysis.json
+
+# Parse Windows jumplist files
+tl 1234567890abcdef.automaticDestinations-ms --format csv --output jumplist_timeline.csv
+tl custom_jumplist.customDestinations-ms
+
+# Parse registry hives for MRU data
+tl NTUSER.DAT --filter "recentdocs" --format json --output mru_data.json
+
+# Parse forensic container archives
+tl evidence.zip                    # ZIP archive containing MFT files
+tl forensic_image.e01             # E01 Expert Witness format
+tl disk_image.dd                  # Raw disk image
+tl case_files.raw                 # Raw forensic image
+tl $MFT.gz                        # Compressed MFT file
 
 # Export to different formats
 tl mft.bin --format json --output timeline.json
-tl mft.bin --format csv --output timeline.csv
+tl registry_hive.dat --format csv --output registry_timeline.csv
 ```
 
 ### Live System Access (Windows)
@@ -123,14 +142,55 @@ tl suspect_machine.zip --filter "powershell" --format csv --output powershell_ac
 # Process multiple compressed evidence files
 tl evidence.zip --filter "malware" --format json --output analysis.json
 
+# Registry analysis for user activity
+tl NTUSER.DAT --filter "bagmru|recentdocs" --format json --output user_activity.json
+
+# Jumplist analysis for application usage
+for file in *.automaticDestinations-ms; do
+    tl "$file" --format csv --output "${file%.automaticDestinations-ms}_jumplist.csv"
+done
+
+# LNK file analysis for persistence mechanisms
+find /evidence/shortcuts -name "*.lnk" -exec tl {} --format json --output {}.json \;
+
 # Bulk processing workflow
 for file in *.zip; do
     tl "$file" --format csv --output "${file%.zip}_timeline.csv"
 done
 
 # Quick triage mode (interactive viewer)
-tl evidence.mft --single-pass --filter "confidential"
+tl evidence.mft --filter "confidential"
 ```
+
+### Registry MRU Locations Parsed
+
+When analyzing registry hives (NTUSER.DAT, SYSTEM, SOFTWARE), tl extracts:
+- `RecentDocs` - Recently opened documents
+- `BagMRU` - Shell folder view settings and accessed folders  
+- `OpenSavePidlMRU` - Open/Save dialog history
+- `LastVisitedPidlMRU` - Recently visited folders
+- `WordWheelQuery` - Windows search terms
+- `JumplistData` & `RecentApps` - Application jumplist data
+- `TaskBand` & `StartPage2` - Taskbar and Start Menu data
+- `Lock Screen` - Lock screen background images
+
+### Jumplist File Analysis  
+
+Automatic and Custom Destination files (`.automaticDestinations-ms`, `.customDestinations-ms`) contain:
+- Recently accessed files per application
+- Pinned items and Quick Access entries
+- Application usage patterns
+- File interaction timestamps
+- Embedded LNK file data with full metadata
+
+### LNK File Parsing
+
+Windows shortcut files (`.lnk`) provide:
+- Target file path and metadata
+- Command line arguments and working directory
+- Icon location and file attributes
+- Creation, access, and modification timestamps
+- Volume information and drive serial numbers
 
 ## 📊 Output Formats
 
@@ -185,8 +245,10 @@ record_number,filename,file_size,location,created,modified
 - Windows operating system with NTFS file system
 - Read-only access - no modification of system data
 
-### Supported Formats
-- **ZIP Archives**: Automatically extracts `$MFT.gz`, `$MFT`, or `mft.gz` files
+### Supported Container Formats
+- **ZIP Archives**: Automatically extracts `$MFT.gz`, `$MFT`, or `mft.gz` files from forensic evidence packages
+- **E01 Expert Witness Format**: Industry-standard forensic disk image format (*.e01, *.e02, etc.)
+- **Raw Disk Images**: Direct processing of dd/raw disk images (*.dd, *.raw, *.img)
 - **GZIP Files**: Direct decompression of `.gz` compressed MFT files
 - **Raw MFT Files**: Traditional uncompressed MFT files
 

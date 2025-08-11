@@ -2,7 +2,7 @@
 
 use crate::datetime::{convert_to_timezone, format_timestamp_human};
 use crate::error::Result;
-use crate::types::{MftRecord, TimelineEvent};
+use crate::types::{Event, TimelineEvent};
 use chrono::{DateTime, Utc, Offset};
 use chrono_tz::Tz;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -29,7 +29,7 @@ pub struct OutputWriter;
 impl OutputWriter {
     /// Write records in the specified format with timezone conversion
     pub fn write_records(
-        records: Vec<MftRecord>,
+        records: Vec<Event>,
         format: OutputFormat,
         writer: Box<dyn Write>,
         timezone: Tz,
@@ -43,7 +43,7 @@ impl OutputWriter {
     }
 
     /// Write records in ascending timeline format with optimized performance
-    pub fn write_timeline(records: Vec<MftRecord>, writer: Box<dyn Write>, timezone: Tz) -> Result<()> {
+    pub fn write_timeline(records: Vec<Event>, writer: Box<dyn Write>, timezone: Tz) -> Result<()> {
         eprintln!("⏰ Building timeline from {} records...", records.len());
         
         // Step 1: Extract all timeline events from all records using parallel processing
@@ -116,10 +116,15 @@ impl OutputWriter {
         for event in sorted_events {
             let converted_time = convert_to_timezone(event.timestamp, timezone);
             let formatted_time = Self::format_timeline_timestamp(&converted_time, timezone);
-            let timestamp_type_with_source = format!("{} ({})", 
-                event.timestamp_type.display_name(),
-                event.timestamp_source.short_form()
-            );
+            let timestamp_type_with_source = if event.event_source.as_deref() == Some("LNK") {
+                // For LNK events, don't include the timestamp source information
+                event.timestamp_type.display_name_for_source(event.event_source.as_deref()).to_string()
+            } else {
+                format!("{} ({})", 
+                    event.timestamp_type.display_name_for_source(event.event_source.as_deref()),
+                    event.timestamp_source.short_form()
+                )
+            };
 
             // Properly escape CSV fields with quotes and handle special characters
             let escaped_filename = Self::escape_csv_field(&event.filename);
@@ -195,20 +200,13 @@ impl OutputWriter {
     }
 
     /// Write records in human-readable format with timezone conversion
-    fn write_human(records: Vec<MftRecord>, mut writer: Box<dyn Write>, timezone: Tz) -> Result<()> {
+    fn write_human(records: Vec<Event>, mut writer: Box<dyn Write>, timezone: Tz) -> Result<()> {
         for record in records {
             let filename = record.filename.as_deref().unwrap_or("N/A");
-            let mut status_flags = Vec::new();
-
-            if record.is_deleted {
-                status_flags.push("❌ DELETED");
-            }
-
-            let flags_str = if status_flags.is_empty() {
-                String::new()
-            } else {
-                format!(" [{}]", status_flags.join("] ["))
-            };
+            
+            // Deleted status is now shown through filename strikethrough in interactive mode
+            // For text output, we'll omit the DELETED flag to keep it clean
+            let flags_str = String::new();
 
             writeln!(writer, "{} ({}){}", filename, record.record_number, flags_str)?;
 
@@ -302,7 +300,7 @@ impl OutputWriter {
     }
 
     /// Write records in JSON format (timestamps remain in UTC for programmatic use)
-    fn write_json(records: Vec<MftRecord>, mut writer: Box<dyn Write>, _timezone: Tz) -> Result<()> {
+    fn write_json(records: Vec<Event>, mut writer: Box<dyn Write>, _timezone: Tz) -> Result<()> {
         // For JSON output, keep timestamps in UTC for better programmatic interoperability
         serde_json::to_writer_pretty(&mut writer, &records)?;
         writeln!(writer)?;
@@ -310,7 +308,7 @@ impl OutputWriter {
     }
 
     /// Write records in CSV format with timezone conversion
-    fn write_csv(records: Vec<MftRecord>, writer: Box<dyn Write>, timezone: Tz) -> Result<()> {
+    fn write_csv(records: Vec<Event>, writer: Box<dyn Write>, timezone: Tz) -> Result<()> {
         let mut csv_writer = csv::Writer::from_writer(writer);
 
         // Write header
@@ -375,7 +373,7 @@ impl OutputWriter {
                 let converted = convert_to_timezone(t.clone(), timezone);
                 format_timestamp_human(&converted)
             })
-            .unwrap_or_default()
+            .unwrap_or_else(|| "N/A".to_string())
     }
 }
 
@@ -397,11 +395,11 @@ pub fn create_writer(output_file: Option<String>) -> Result<Box<dyn Write>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{MftTimestamps, AlternateDataStream};
+    use crate::types::{EventTimestamps, AlternateDataStream};
     use chrono::Utc;
 
-    fn create_test_record() -> MftRecord {
-        MftRecord {
+    fn create_test_record() -> Event {
+        Event {
             record_number: 123,
             sequence_number: 1,
             filename: Some("test.txt".to_string()),
@@ -411,13 +409,13 @@ mod tests {
             is_deleted: false,
             link_count: Some(1),
             parent_directory: Some(5),
-            timestamps: MftTimestamps {
+            timestamps: EventTimestamps {
                 created: Some(Utc::now()),
                 modified: Some(Utc::now()),
                 mft_modified: Some(Utc::now()),
                 accessed: Some(Utc::now()),
             },
-            fn_timestamps: MftTimestamps::default(),
+            fn_timestamps: EventTimestamps::default(),
             alternate_data_streams: vec![AlternateDataStream {
                 name: "Zone.Identifier".to_string(),
                 size: 26,

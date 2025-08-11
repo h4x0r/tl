@@ -1,47 +1,49 @@
-//! Core data types for MFT records and related structures.
+//! Core data types for forensic timeline events and related structures.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Represents a single MFT record with all parsed metadata
+/// Represents a single forensic timeline event from various artifacts (MFT, LNK, Registry, etc.)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MftRecord {
-    /// MFT record number (unique identifier)
+pub struct Event {
+    /// Record number (MFT record number for MFT events, 0 for others)
     pub record_number: u64,
-    /// Sequence number for record reuse tracking
+    /// Sequence number (for MFT record reuse tracking, 0 for others)
     pub sequence_number: u16,
-    /// Primary filename (long name preferred over 8.3)
+    /// Primary filename or event description
     pub filename: Option<String>,
-    /// File size in bytes
+    /// File size in bytes (when applicable)
     pub file_size: Option<u64>,
-    /// Allocated size on disk
+    /// Allocated size on disk (when applicable)
     pub allocated_size: Option<u64>,
-    /// Whether this record represents a directory
+    /// Whether this represents a directory
     pub is_directory: bool,
-    /// Whether this record has been deleted
+    /// Whether this record has been deleted (MFT only)
     pub is_deleted: bool,
-    /// Number of hard links to this file
+    /// Number of hard links to this file (MFT only)
     pub link_count: Option<u16>,
-    /// Parent directory MFT record number
+    /// Parent directory record number (MFT only)
     pub parent_directory: Option<u64>,
-    /// Timestamps from STANDARD_INFORMATION attribute
-    pub timestamps: MftTimestamps,
-    /// Timestamps from FILE_NAME attribute
-    pub fn_timestamps: MftTimestamps,
-    /// Alternative Data Streams associated with this file
+    /// Primary timestamps (available for all event types)
+    pub timestamps: EventTimestamps,
+    /// FILE_NAME attribute timestamps (MFT only, others will be None)
+    pub fn_timestamps: EventTimestamps,
+    /// Alternative Data Streams (MFT only)
     pub alternate_data_streams: Vec<AlternateDataStream>,
-    /// Full directory path (available in two-pass mode)
+    /// Full directory path or event location
     pub location: Option<String>,
+    /// Event source type (MFT, LNK, Registry, etc.)
+    pub event_source: Option<String>,
 }
 
-/// NTFS timestamp collection
+/// Timestamp collection for forensic timeline events
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MftTimestamps {
-    /// File creation time
+pub struct EventTimestamps {
+    /// File/event creation time
     pub created: Option<DateTime<Utc>>,
     /// Last modification time
     pub modified: Option<DateTime<Utc>>,
-    /// MFT record modification time
+    /// MFT record modification time (MFT events only, None for others)
     pub mft_modified: Option<DateTime<Utc>>,
     /// Last access time
     pub accessed: Option<DateTime<Utc>>,
@@ -88,10 +90,10 @@ pub enum MftFormat {
     Sparse,
 }
 
-/// A single timeline event extracted from MFT record timestamps
+/// A single timeline event extracted from forensic artifacts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineEvent {
-    /// Filename from the MFT record
+    /// Filename or event description
     pub filename: String,
     /// The timestamp for this event
     pub timestamp: DateTime<Utc>,
@@ -99,7 +101,7 @@ pub struct TimelineEvent {
     pub timestamp_type: TimestampType,
     /// Source of timestamp ($STANDARD_INFORMATION or $FILE_NAME)
     pub timestamp_source: TimestampSource,
-    /// MFT record number
+    /// Record number (MFT record number for MFT events, 0 for others)
     pub mft_record_number: u64,
     /// Full path/location of the file
     pub location: String,
@@ -107,6 +109,8 @@ pub struct TimelineEvent {
     pub file_size: Option<u64>,
     /// Whether this record represents a directory
     pub is_directory: bool,
+    /// Event source type (MFT, LNK, Registry, etc.)
+    pub event_source: Option<String>,
 }
 
 /// Type of timestamp in the timeline
@@ -133,6 +137,31 @@ impl TimestampType {
             TimestampType::Modified => "File/folder modified", 
             TimestampType::MftModified => "File/folder index record modified",
             TimestampType::Accessed => "File/folder accessed",
+        }
+    }
+
+    /// Get the display name for the timestamp type with event source context
+    pub fn display_name_for_source(&self, event_source: Option<&str>) -> &'static str {
+        match event_source {
+            Some("LNK") => match self {
+                TimestampType::Created => "Shortcut file created",
+                TimestampType::Modified => "Shortcut file modified",
+                TimestampType::Accessed => "Shortcut file accessed",
+                TimestampType::MftModified => "Shortcut file modified", // MftModified not applicable to LNK
+            },
+            Some("Registry") => match self {
+                TimestampType::Created => "Registry key created",
+                TimestampType::Modified => "Registry key modified",
+                TimestampType::Accessed => "Registry key accessed",
+                TimestampType::MftModified => "Registry key modified", // MftModified not applicable to Registry
+            },
+            Some("Jumplist") => match self {
+                TimestampType::Created => "Jumplist entry created",
+                TimestampType::Modified => "Jumplist entry modified",
+                TimestampType::Accessed => "Jumplist entry accessed",
+                TimestampType::MftModified => "Jumplist entry modified", // MftModified not applicable to Jumplist
+            },
+            _ => self.display_name(), // Default to MFT descriptions for MFT events or unknown sources
         }
     }
 
@@ -194,7 +223,7 @@ impl ParsingConfig {
     }
 }
 
-impl MftRecord {
+impl Event {
     /// Extract all timeline events from this MFT record
     /// Returns up to 8 events (4 from SI, 4 from FN) if timestamps are present
     pub fn extract_timeline_events(&self) -> Vec<TimelineEvent> {
@@ -213,6 +242,7 @@ impl MftRecord {
                 location: location.clone(),
                 file_size: self.file_size,
                 is_directory: self.is_directory,
+                event_source: self.event_source.clone(),
             });
         }
 
@@ -226,6 +256,7 @@ impl MftRecord {
                 location: location.clone(),
                 file_size: self.file_size,
                 is_directory: self.is_directory,
+                event_source: self.event_source.clone(),
             });
         }
 
@@ -239,6 +270,7 @@ impl MftRecord {
                 location: location.clone(),
                 file_size: self.file_size,
                 is_directory: self.is_directory,
+                event_source: self.event_source.clone(),
             });
         }
 
@@ -252,6 +284,7 @@ impl MftRecord {
                 location: location.clone(),
                 file_size: self.file_size,
                 is_directory: self.is_directory,
+                event_source: self.event_source.clone(),
             });
         }
 
@@ -266,6 +299,7 @@ impl MftRecord {
                 location: location.clone(),
                 file_size: self.file_size,
                 is_directory: self.is_directory,
+                event_source: self.event_source.clone(),
             });
         }
 
@@ -279,6 +313,7 @@ impl MftRecord {
                 location: location.clone(),
                 file_size: self.file_size,
                 is_directory: self.is_directory,
+                event_source: self.event_source.clone(),
             });
         }
 
@@ -292,6 +327,7 @@ impl MftRecord {
                 location: location.clone(),
                 file_size: self.file_size,
                 is_directory: self.is_directory,
+                event_source: self.event_source.clone(),
             });
         }
 
@@ -305,6 +341,7 @@ impl MftRecord {
                 location: location.clone(),
                 file_size: self.file_size,
                 is_directory: self.is_directory,
+                event_source: self.event_source.clone(),
             });
         }
 

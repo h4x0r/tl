@@ -20,12 +20,20 @@
 pub mod app;
 pub mod benchmark;
 pub mod cli;
+pub mod container;
 pub mod datetime;
 pub mod error;
 pub mod fast_formatter;
 pub mod interactive;
+pub mod jumplist;
+pub mod live_registry;
+pub mod lnk_parser;
 pub mod mft;
+pub mod ole;
 pub mod output;
+pub mod property_store;
+pub mod registry;
+pub mod shell_item;
 pub mod simd_optimize;
 pub mod types;
 
@@ -35,7 +43,7 @@ pub mod windows;
 pub use error::{Error, Result};
 pub use mft::MftParser;
 pub use output::{OutputFormat, OutputWriter};
-pub use types::{AlternateDataStream, MftRecord, MftTimestamps};
+pub use types::{AlternateDataStream, Event, EventTimestamps};
 
 #[cfg(windows)]
 pub use windows::LiveSystemAccess;

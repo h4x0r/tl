@@ -46,6 +46,7 @@ wide = "0.7"
 parking_lot = "0.12"
 dashmap = "5.5"
 crossbeam-channel = "0.5"
+# Container format support (E01 support will be added later)
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["fileapi", "handleapi", "ioapiset", "winnt", "errhandlingapi", "winbase"] }

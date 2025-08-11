@@ -1,6 +1,6 @@
 //! Ultra-fast event formatting with aggressive optimizations
 
-use crate::types::{TimelineEvent, MftRecord, TimestampType, TimestampSource};
+use crate::types::{TimelineEvent, Event, TimestampType, TimestampSource};
 use crate::interactive::FormattedRow;
 use chrono_tz::Tz;
 use dashmap::DashMap;
@@ -120,7 +120,7 @@ pub struct LookupTables {
 }
 
 impl LookupTables {
-    pub fn new(records: &[MftRecord]) -> Self {
+    pub fn new(records: &[Event]) -> Self {
         // Pre-compute all type+source combinations
         let types = ["File/folder created", "File/folder modified", 
                      "File/folder index record modified", "File/folder accessed"];
@@ -218,7 +218,7 @@ pub struct FastFormatter {
 }
 
 impl FastFormatter {
-    pub fn new(records: &[MftRecord], timezone: Tz) -> Self {
+    pub fn new(records: &[Event], timezone: Tz) -> Self {
         Self {
             string_cache: Arc::new(StringCache::new()),
             lookup_tables: Arc::new(LookupTables::new(records)),
@@ -263,14 +263,23 @@ impl FastFormatter {
         // Use cached formatted timestamp
         let formatted_time = self.timestamp_formatter.format_single(event.timestamp);
         
-        // Use pre-computed type+source combo
-        let type_source = self.lookup_tables.get_type_source(
-            event.timestamp_type,
-            event.timestamp_source
-        );
+        // Use pre-computed type+source combo, but handle LNK files specially
+        let type_source = if event.event_source.as_deref() == Some("LNK") {
+            // For LNK events, don't include the timestamp source information
+            Arc::from(event.timestamp_type.display_name_for_source(event.event_source.as_deref()))
+        } else {
+            self.lookup_tables.get_type_source(
+                event.timestamp_type,
+                event.timestamp_source
+            )
+        };
         
         // Use Arc strings to avoid allocations
-        let record: Arc<str> = Arc::from(event.mft_record_number.to_string().as_str());
+        let record: Arc<str> = if event.event_source.as_deref() == Some("LNK") {
+            Arc::from("🔗")  // Use link emoji for LNK files
+        } else {
+            Arc::from(event.mft_record_number.to_string().as_str())
+        };
         
         // Use cached size formatting
         let size = self.string_cache.format_size(event.file_size, event.is_directory);
@@ -303,7 +312,7 @@ impl FastFormatter {
 /// Public API for fast formatting
 pub fn format_events_ultra_fast(
     events: &[TimelineEvent],
-    records: &[MftRecord], 
+    records: &[Event], 
     timezone: Tz
 ) -> Vec<FormattedRow> {
     let formatter = FastFormatter::new(records, timezone);
