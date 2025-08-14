@@ -6,7 +6,6 @@
 
 use crate::error::{Error, Result};
 use crate::property_store::PropertyStore;
-use crate::types::EventTimestamps;
 use byteorder::{LittleEndian, ReadBytesExt};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};

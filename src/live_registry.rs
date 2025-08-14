@@ -7,9 +7,9 @@
 use winapi::um::{
     winreg::{
         RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW,
-        HKEY_CURRENT_USER, KEY_READ,
+        HKEY_CURRENT_USER,
     },
-    winnt::{REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_QWORD, REG_SZ},
+    winnt::{REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_QWORD, REG_SZ, KEY_READ},
 };
 
 use crate::error::{Error, Result};

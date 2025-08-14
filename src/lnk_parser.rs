@@ -5,12 +5,12 @@
 //! file information, making them valuable forensic artifacts.
 
 use crate::error::{Error, Result};
-use crate::shell_item::{ItemIdList, ShellItem};
+use crate::shell_item::ItemIdList;
 use crate::types::EventTimestamps;
 use byteorder::{LittleEndian, ReadBytesExt};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Read};
 
 /// Shell Link (.lnk) file structure
 #[derive(Debug, Clone, Serialize, Deserialize)]

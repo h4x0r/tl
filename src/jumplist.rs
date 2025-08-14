@@ -34,31 +34,74 @@ pub struct JumplistEntry {
 }
 
 /// Jumplist parser for automatic and custom destinations files
-pub struct JumplistParser {
-    /// FILETIME epoch difference
-    filetime_epoch_diff: u64,
-}
+pub struct JumplistParser {}
 
 impl JumplistParser {
     /// Create new jumplist parser
     pub fn new() -> Self {
-        Self {
-            filetime_epoch_diff: 116444736000000000,
-        }
+        Self {}
     }
 
     /// Parse automatic destinations file (.automaticDestinations-ms)
     pub fn parse_automatic_destinations(&self, data: &[u8]) -> Result<Vec<JumplistEntry>> {
         // Automatic destinations are OLE compound documents containing LNK files
         match OleCompoundDocument::parse(data) {
-            Ok(_ole_doc) => {
-                // TODO: Extract LNK streams from OLE document and parse them
-                // For now, return empty vector as placeholder
-                Ok(Vec::new())
+            Ok(ole_doc) => {
+                let mut entries = Vec::new();
+                
+                // Parse DestList stream for metadata
+                let mut dest_list_entries = Vec::new();
+                if let Some(destlist_data) = ole_doc.get_stream("DestList") {
+                    dest_list_entries = self.parse_dest_list_stream(destlist_data)?;
+                }
+                
+                // Extract and parse LNK files from numbered streams
+                for stream_name in ole_doc.list_streams() {
+                    // LNK streams are typically numbered (1, 2, 3, etc.)
+                    if stream_name.chars().all(|c| c.is_ascii_digit()) {
+                        if let Some(lnk_data) = ole_doc.get_stream(&stream_name) {
+                            if let Ok(shell_link) = ShellLink::parse(lnk_data) {
+                                // Find corresponding DestList entry by stream number
+                                let stream_num: usize = stream_name.parse().unwrap_or(0);
+                                let dest_entry = dest_list_entries.get(stream_num.saturating_sub(1));
+                                
+                                let entry = JumplistEntry {
+                                    target_path: shell_link.target_path.clone(),
+                                    file_size: Some(shell_link.header.file_size as u64),
+                                    file_attributes: Some(shell_link.header.file_attributes),
+                                    app_id: None, // Will be set by caller
+                                    access_count: dest_entry.map(|d| d.access_count),
+                                    timestamps: shell_link.timestamps.clone(),
+                                };
+                                entries.push(entry);
+                            }
+                        }
+                    }
+                }
+                
+                Ok(entries)
             },
             Err(_) => {
-                // Fallback for non-OLE format
-                Ok(Vec::new())
+                // Fallback: try to parse as raw LNK data
+                if data.len() > 76 && &data[0..4] == b"L\x00\x00\x00" {
+                    // Looks like a single LNK file
+                    match ShellLink::parse(data) {
+                        Ok(shell_link) => {
+                            let entry = JumplistEntry {
+                                target_path: shell_link.target_path,
+                                file_size: Some(shell_link.header.file_size as u64),
+                                file_attributes: Some(shell_link.header.file_attributes),
+                                app_id: None,
+                                access_count: None,
+                                timestamps: shell_link.timestamps,
+                            };
+                            Ok(vec![entry])
+                        },
+                        Err(_) => Ok(Vec::new()),
+                    }
+                } else {
+                    Ok(Vec::new())
+                }
             }
         }
     }
@@ -67,13 +110,70 @@ impl JumplistParser {
     pub fn parse_custom_destinations(&self, data: &[u8]) -> Result<Vec<JumplistEntry>> {
         // Custom destinations are binary files with embedded LNK data
         let mut entries = Vec::new();
-        let mut cursor = Cursor::new(data);
+        let _cursor = Cursor::new(data);
         
-        // TODO: Implement proper custom destinations parsing
-        // For now, create a placeholder entry
-        if !data.is_empty() {
+        // Custom destinations have a different structure than automatic destinations
+        // They contain categories and embedded LNK files
+        
+        // Skip header if present (usually starts with category information)
+        if data.len() < 16 {
+            return Ok(entries);
+        }
+        
+        // Try to find LNK file signatures within the data
+        let lnk_signature = b"L\x00\x00\x00";
+        let mut pos = 0;
+        
+        while pos + 76 < data.len() {
+            // Look for LNK file signature
+            if let Some(lnk_start) = data[pos..].windows(4).position(|window| window == lnk_signature) {
+                let actual_start = pos + lnk_start;
+                
+                // Try to determine the size of this LNK file
+                // Read the header to get the full size
+                if actual_start + 76 < data.len() {
+                    let lnk_data_start = &data[actual_start..];
+                    
+                    // Parse just enough to determine LNK size
+                    match self.estimate_lnk_size(lnk_data_start) {
+                        Some(lnk_size) => {
+                            if actual_start + lnk_size <= data.len() {
+                                let lnk_data = &data[actual_start..actual_start + lnk_size];
+                                
+                                // Parse the LNK file
+                                if let Ok(shell_link) = ShellLink::parse(lnk_data) {
+                                    let entry = JumplistEntry {
+                                        target_path: shell_link.target_path,
+                                        file_size: Some(shell_link.header.file_size as u64),
+                                        file_attributes: Some(shell_link.header.file_attributes),
+                                        app_id: None, // Will be set by caller
+                                        access_count: None, // Custom destinations don't have access counts
+                                        timestamps: shell_link.timestamps,
+                                    };
+                                    entries.push(entry);
+                                }
+                                
+                                pos = actual_start + lnk_size;
+                            } else {
+                                pos = actual_start + 1;
+                            }
+                        },
+                        None => {
+                            pos = actual_start + 1;
+                        }
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        
+        // If no LNK files found, create a placeholder entry
+        if entries.is_empty() && !data.is_empty() {
             let entry = JumplistEntry {
-                target_path: Some("Custom Destinations Entry".to_string()),
+                target_path: Some("Custom Destinations (unknown format)".to_string()),
                 file_size: Some(data.len() as u64),
                 file_attributes: None,
                 app_id: None,
@@ -84,6 +184,175 @@ impl JumplistParser {
         }
         
         Ok(entries)
+    }
+
+    /// Parse DestList stream from automatic destinations
+    fn parse_dest_list_stream(&self, data: &[u8]) -> Result<Vec<DestListEntry>> {
+        let mut entries = Vec::new();
+        let mut cursor = Cursor::new(data);
+        
+        // Skip header (32 bytes) if present
+        if data.len() > 32 {
+            cursor.seek(SeekFrom::Start(32))?;
+        }
+        
+        // Parse entries until we reach the end
+        while cursor.position() + 24 < data.len() as u64 {
+            match self.parse_dest_list_entry(&mut cursor) {
+                Ok(entry) => entries.push(entry),
+                Err(_) => break, // Stop on parsing errors
+            }
+        }
+        
+        Ok(entries)
+    }
+
+    /// Parse individual DestList entry
+    fn parse_dest_list_entry(&self, cursor: &mut Cursor<&[u8]>) -> Result<DestListEntry> {
+        let size = cursor.read_u32::<LittleEndian>()?;
+        let entry_type = cursor.read_u32::<LittleEndian>()?;
+        let pin_status = cursor.read_u32::<LittleEndian>()?;
+        let access_count = cursor.read_u32::<LittleEndian>()?;
+        let last_access_time = cursor.read_u64::<LittleEndian>()?;
+        
+        // Read remaining entry data (variable length)
+        let remaining_size = size.saturating_sub(24) as usize;
+        let mut entry_id = vec![0u8; remaining_size];
+        if remaining_size > 0 {
+            cursor.read_exact(&mut entry_id)?;
+        }
+        
+        // Try to extract target path from entry ID
+        let target_path = self.extract_target_path_from_entry_id(&entry_id);
+        
+        Ok(DestListEntry {
+            size,
+            entry_type,
+            pin_status,
+            access_count,
+            last_access_time,
+            entry_id,
+            target_path,
+        })
+    }
+
+    /// Extract target path from DestList entry ID data
+    fn extract_target_path_from_entry_id(&self, entry_id: &[u8]) -> Option<String> {
+        // Try parsing as ItemIdList first
+        if let Ok(idlist) = ItemIdList::parse(entry_id) {
+            if let Some(path) = idlist.full_path {
+                return Some(path);
+            }
+        }
+        
+        // Fallback: look for readable strings in the data
+        if let Ok(text) = String::from_utf8(entry_id.to_vec()) {
+            let cleaned = text.trim().trim_matches('\0');
+            if !cleaned.is_empty() && cleaned.len() > 3 {
+                return Some(cleaned.to_string());
+            }
+        }
+        
+        // Try UTF-16 parsing
+        if entry_id.len() >= 4 && entry_id.len() % 2 == 0 {
+            let utf16_data: Vec<u16> = entry_id
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .take_while(|&c| c != 0)
+                .collect();
+            
+            if !utf16_data.is_empty() {
+                let text = String::from_utf16_lossy(&utf16_data);
+                let cleaned = text.trim();
+                if !cleaned.is_empty() && cleaned.len() > 3 {
+                    return Some(cleaned.to_string());
+                }
+            }
+        }
+        
+        None
+    }
+
+    /// Estimate the size of a LNK file from its header and structure
+    fn estimate_lnk_size(&self, data: &[u8]) -> Option<usize> {
+        if data.len() < 76 {
+            return None;
+        }
+        
+        // Check LNK signature
+        if &data[0..4] != b"L\x00\x00\x00" {
+            return None;
+        }
+        
+        let mut cursor = Cursor::new(data);
+        
+        // Parse header to get flags
+        if cursor.seek(SeekFrom::Start(20)).is_err() {
+            return None;
+        }
+        
+        let link_flags = match cursor.read_u32::<LittleEndian>() {
+            Ok(flags) => flags,
+            Err(_) => return None,
+        };
+        
+        let mut estimated_size = 76; // Base header size
+        
+        // Skip to after header
+        if cursor.seek(SeekFrom::Start(76)).is_err() {
+            return None;
+        }
+        
+        // Add size of optional structures based on flags
+        if link_flags & 0x01 != 0 {
+            // HasLinkTargetIDList
+            if let Ok(idlist_size) = cursor.read_u16::<LittleEndian>() {
+                estimated_size += 2 + idlist_size as usize;
+                if cursor.seek(SeekFrom::Current(idlist_size as i64)).is_err() {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
+        
+        if link_flags & 0x02 != 0 {
+            // HasLinkInfo
+            if let Ok(link_info_size) = cursor.read_u32::<LittleEndian>() {
+                estimated_size += link_info_size as usize;
+                if cursor.seek(SeekFrom::Current(link_info_size as i64 - 4)).is_err() {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        }
+        
+        // Add estimated size for string data (simplified)
+        let string_flags = [0x04, 0x08, 0x10, 0x20, 0x40]; // Name, RelativePath, WorkingDir, Arguments, IconLocation
+        for &flag in &string_flags {
+            if link_flags & flag != 0 {
+                if let Ok(string_count) = cursor.read_u16::<LittleEndian>() {
+                    let string_size = string_count as usize * 2; // Unicode characters
+                    estimated_size += 2 + string_size;
+                    if cursor.seek(SeekFrom::Current(string_size as i64)).is_err() {
+                        break; // Don't fail completely, just stop parsing strings
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        // Add some padding for extra data blocks (simplified)
+        estimated_size += 100;
+        
+        // Cap the size to prevent excessive memory allocation
+        if estimated_size > data.len() {
+            Some(data.len().min(65536)) // Cap at 64KB
+        } else {
+            Some(estimated_size)
+        }
     }
 }
 

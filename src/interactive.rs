@@ -2,6 +2,7 @@
 //! Adapted from csview's table formatting system with interactive navigation
 
 use crate::types::TimelineEvent;
+use crate::formatter::{FormattedRow, format_events};
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use crossterm::{
@@ -20,26 +21,6 @@ use ratatui::{
 use std::io::{self, Stdout};
 use unicode_width::UnicodeWidthChar;
 
-/// Format a number with comma separators
-fn format_number_with_commas(mut num: u64) -> String {
-    if num == 0 {
-        return "0".to_string();
-    }
-    
-    let mut result = String::new();
-    let mut count = 0;
-    
-    while num > 0 {
-        if count > 0 && count % 3 == 0 {
-            result.insert(0, ',');
-        }
-        result.insert(0, (b'0' + (num % 10) as u8) as char);
-        num /= 10;
-        count += 1;
-    }
-    
-    result
-}
 
 
 
@@ -89,18 +70,6 @@ impl Theme {
     }
 }
 
-/// Pre-formatted row for fast rendering
-#[derive(Clone)]
-pub struct FormattedRow {
-    pub filename: String,
-    pub timestamp: String,
-    pub type_source: String,
-    pub record: String,
-    pub size: String,
-    pub location: String,
-    pub full_path: String, // Combined location + filename for efficient search
-    pub is_deleted: bool, // Track if file is deleted for strikethrough formatting
-}
 
 /// Interactive timeline viewer with lazy loading
 pub struct InteractiveViewer {
@@ -151,7 +120,7 @@ impl InteractiveViewer {
         let viewport_size = (size.height as usize).saturating_sub(15);
 
         // Pre-format all data for fast rendering
-        let formatted_rows = Self::preformat_events(&events, &records, timezone);
+        let formatted_rows = format_events(&events, &records, timezone);
 
         Ok(Self {
             terminal,
@@ -316,8 +285,8 @@ impl InteractiveViewer {
             });
         }
         
-        // Pre-format events for display with ultra-fast formatter
-        self.formatted_rows = crate::fast_formatter::format_events_ultra_fast(&self.events, &self.records, self.timezone);
+        // Pre-format events for display with unified formatter
+        self.formatted_rows = format_events(&self.events, &self.records, self.timezone);
         
         // Finalize
         self.filtered_events = (0..self.events.len()).collect();
@@ -360,77 +329,7 @@ impl InteractiveViewer {
         all_events
     }
 
-    /// Pre-format events with progress bar using the ultra-fast formatter
-    fn preformat_events_with_progress(&self, events: &[TimelineEvent], records: &[crate::types::Event]) -> Vec<FormattedRow> {
-        // Use the ultra-fast formatter from fast_formatter module
-        crate::fast_formatter::format_events_ultra_fast(events, records, self.timezone)
-    }
 
-    /// Pre-format all events for fast rendering (legacy method)
-    fn preformat_events(events: &[TimelineEvent], records: &[crate::types::Event], timezone: Tz) -> Vec<FormattedRow> {
-        // Create a HashMap for O(1) MFT record lookup
-        let mut record_map = std::collections::HashMap::new();
-        for record in records {
-            record_map.insert(record.record_number, record);
-        }
-        
-        events
-            .iter()
-            .map(|event| {
-                let formatted_time = {
-                    let converted_time = crate::datetime::convert_to_timezone(event.timestamp, timezone);
-                    crate::datetime::format_timestamp_human(&converted_time)
-                };
-                
-                let timestamp_type_with_source = if event.event_source.as_deref() == Some("LNK") {
-                    // For LNK events, don't include the timestamp source information
-                    event.timestamp_type.display_name_for_source(event.event_source.as_deref()).to_string()
-                } else {
-                    format!("{} ({})", 
-                        event.timestamp_type.display_name_for_source(event.event_source.as_deref()),
-                        event.timestamp_source.short_form()
-                    )
-                };
-                let record = if event.event_source.as_deref() == Some("LNK") {
-                    "🔗".to_string()  // Use link emoji for LNK files
-                } else {
-                    event.mft_record_number.to_string()
-                };
-                
-                // Use file size and directory info directly from TimelineEvent
-                let formatted_size = if event.is_directory {
-                    // Use folder emoji with proper padding for wider column
-                    format!("{}📁", " ".repeat(11))
-                } else {
-event.file_size.map_or("Unknown".to_string(), |s| {
-                        format!("{:>13}", format_number_with_commas(s))
-                    })
-                };
-                
-                // Get deletion status from MFT record if available
-                let mft_record = record_map.get(&event.mft_record_number);
-                let is_deleted = mft_record.is_some_and(|rec| rec.is_deleted);
-                
-                // Construct full path by combining location and filename
-                let full_path = if event.location.ends_with('\\') || event.location == "\\" {
-                    format!("{}{}", event.location, event.filename)
-                } else {
-                    format!("{}\\{}", event.location, event.filename)
-                };
-                
-                FormattedRow {
-                    filename: event.filename.clone(),
-                    timestamp: formatted_time,
-                    type_source: timestamp_type_with_source,
-                    record,
-                    size: formatted_size,
-                    location: event.location.clone(),
-                    full_path,
-                    is_deleted,
-                }
-            })
-            .collect()
-    }
 
     /// Draw the interface - optimized for speed
     fn draw(&mut self) -> io::Result<()> {

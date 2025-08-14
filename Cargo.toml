@@ -36,6 +36,7 @@ crossterm = "0.27"
 ratatui = "0.28"
 unicode-width = "0.2"
 is-terminal = "0.4"
+urlencoding = "2.1"
 # Dependencies for proper MFT parsing
 log = "0.4"
 encoding = "0.2"

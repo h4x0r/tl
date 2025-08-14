@@ -174,8 +174,11 @@ impl App {
             "customDestinations-ms"
         };
         
-        let temp_path = temp_dir.join(format!("temp_{}.{}", 
-            std::process::id(), extension));
+        let temp_path = temp_dir.join(format!("temp_{}_{}.{}", 
+            std::process::id(), 
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default().as_nanos(), 
+            extension));
         
         // Write artifact data to temp file
         let mut temp_file = std::fs::File::create(&temp_path)?;

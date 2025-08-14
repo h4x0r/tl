@@ -124,8 +124,6 @@ impl From<u8> for OleEntryType {
 /// Special sector values
 const FREESECT: u32 = 0xFFFFFFFF;
 const ENDOFCHAIN: u32 = 0xFFFFFFFE;
-const FATSECT: u32 = 0xFFFFFFFD;
-const DIFSECT: u32 = 0xFFFFFFFC;
 
 impl OleCompoundDocument {
     /// Parse OLE compound document from bytes

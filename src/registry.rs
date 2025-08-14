@@ -11,8 +11,7 @@ use crate::types::EventTimestamps;
 use byteorder::{LittleEndian, ReadBytesExt};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 /// Registry timeline event extracted from registry hives

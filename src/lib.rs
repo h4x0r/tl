@@ -23,7 +23,7 @@ pub mod cli;
 pub mod container;
 pub mod datetime;
 pub mod error;
-pub mod fast_formatter;
+pub mod formatter;
 pub mod interactive;
 pub mod jumplist;
 pub mod live_registry;

@@ -154,7 +154,6 @@ pub struct MftParser {
     /// Processing configuration
     parallel_threads: usize,
     use_simd: bool,
-    use_streaming: bool,
 }
 
 impl MftParser {
@@ -166,7 +165,6 @@ impl MftParser {
             mmap_cache: Arc::new(RwLock::new(None)),
             parallel_threads: std::cmp::min(rayon::current_num_threads(), MAX_PARALLEL_THREADS),
             use_simd: Self::detect_simd_support(),
-            use_streaming: true,
         }
     }
     
@@ -198,6 +196,14 @@ impl MftParser {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        
+        // Check for jumplist files first (handle compound extensions)
+        if filename.ends_with(".automaticDestinations-ms") {
+            return Ok(InputType::AutomaticDestinations);
+        } else if filename.ends_with(".customDestinations-ms") {
+            return Ok(InputType::CustomDestinations);
+        }
         
         match extension.as_str() {
             "lnk" => Ok(InputType::Lnk),
@@ -246,7 +252,7 @@ impl MftParser {
     }
     
     /// Parse input from file path - dispatches to appropriate parser based on file type
-    pub fn parse_input(&mut self, path: &Path, password: Option<&str>) -> Result<Vec<Event>> {
+    pub fn parse_input(&mut self, path: &Path, _password: Option<&str>) -> Result<Vec<Event>> {
         // Detect input file type
         let input_type = Self::detect_input_type(path)?;
         
@@ -410,8 +416,8 @@ impl MftParser {
             .into_par_iter()
             .map(|chunk_boundaries| {
                 let mut chunk_records = Vec::with_capacity(chunk_boundaries.len());
-                let mut valid_count = 0;
-                let mut error_count = 0;
+                let mut _valid_count = 0;
+                let mut _error_count = 0;
                 
                 for &offset in chunk_boundaries {
                     if offset + MFT_RECORD_SIZE <= data.len() {
@@ -421,11 +427,11 @@ impl MftParser {
                         match self.parse_single_entry_fast(record_data, record_number) {
                             Ok(Some(record)) => {
                                 chunk_records.push(record);
-                                valid_count += 1;
+                                _valid_count += 1;
                             }
                             Ok(None) => {} // Skip invalid records
                             Err(_e) => {
-                                error_count += 1;
+                                _error_count += 1;
                             }
                         }
                     }
@@ -1061,6 +1067,24 @@ impl MftParser {
         Ok(Some(record))
     }
 
+    /// Clean jumplist path to show proper Windows path structure
+    fn clean_jumplist_path(path: &Path) -> String {
+        let path_str = path.to_string_lossy();
+        
+        // Handle URL-encoded paths like "uploads/auto/C%3A/Users/..."
+        let decoded_path = urlencoding::decode(&path_str).unwrap_or(std::borrow::Cow::Borrowed(&path_str));
+        
+        // Find "Users" in the path and extract from there
+        if let Some(users_pos) = decoded_path.find("Users") {
+            decoded_path[users_pos..].to_string()
+        } else {
+            // If no "Users" found, try to extract just the filename
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| decoded_path.to_string())
+        }
+    }
+
     /// Convert Jumplist Entry to Event format
     fn jumplist_entry_to_mft_record(
         entry: &crate::jumplist::JumplistEntry, 
@@ -1069,9 +1093,14 @@ impl MftParser {
         let filename = entry.target_path.clone()
             .unwrap_or_else(|| "Unknown Jumplist Entry".to_string());
 
-        let location = source_path.parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Unknown".to_string());
+        let cleaned_path = Self::clean_jumplist_path(source_path);
+        let location = if let Some(parent_pos) = cleaned_path.rfind('/') {
+            cleaned_path[..parent_pos].to_string()
+        } else if let Some(parent_pos) = cleaned_path.rfind('\\') {
+            cleaned_path[..parent_pos].to_string()
+        } else {
+            "Unknown".to_string()
+        };
 
         let jumplist_type = if source_path.to_string_lossy().contains("automaticDestinations") {
             "AutoDest"
@@ -1082,7 +1111,7 @@ impl MftParser {
         let record = Event {
             record_number: 0, // Jumplist entries don't have MFT record numbers
             sequence_number: 0,
-            filename: Some(format!("{}: {}", jumplist_type, filename)),
+            filename: Some(format!("{}: {}", jumplist_type, filename)), // Clean filename without emoji
             file_size: Some(entry.file_size.unwrap_or(0)),
             allocated_size: Some(entry.file_size.unwrap_or(0)),
             is_directory: false,
@@ -1092,7 +1121,7 @@ impl MftParser {
             timestamps: entry.timestamps.clone(),
             fn_timestamps: EventTimestamps::default(), // Jumplist files don't have FILE_NAME attributes (N/A)
             alternate_data_streams: Vec::new(),
-            location: Some(format!("{} [Source: {}]", location, source_path.to_string_lossy())),
+            location: Some(format!("{} [Source: {}]", cleaned_path.rsplit(['/', '\\']).next().unwrap_or(&cleaned_path), cleaned_path)),
             event_source: Some("Jumplist".to_string()),
         };
 
